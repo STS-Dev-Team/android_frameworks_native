@@ -28,6 +28,10 @@
 #include <utils/threads.h>
 #include <utils/KeyedVector.h>
 
+#ifdef OMAP_ENHANCEMENT_CPCAM
+#include <binder/MemoryBase.h>
+#endif
+
 struct ANativeWindow_Buffer;
 
 namespace android {
@@ -86,6 +90,7 @@ private:
     int dispatchUnlockAndPost(va_list args);
 #ifdef OMAP_ENHANCEMENT_CPCAM
     int dispatchUpdateAndGetCurrent(va_list args);
+    int dispatchSetBuffersMetadata(va_list args);
 #endif
 
 #ifdef OMAP_ENHANCEMENT
@@ -119,6 +124,7 @@ protected:
 #endif
 #ifdef OMAP_ENHANCEMENT_CPCAM
     virtual int updateAndGetCurrent(ANativeWindowBuffer** buffer);
+    virtual int setBuffersMetadata(const sp<MemoryBase>& metadata);
 #endif
 
     enum { NUM_BUFFER_SLOTS = BufferQueue::NUM_BUFFER_SLOTS };
@@ -205,6 +211,10 @@ private:
     // one buffer behind the producer.
     mutable bool mConsumerRunningBehind;
 
+#ifdef OMAP_ENHANCEMENT_CPCAM
+    // Metadata for the current texture
+    sp<MemoryBase> mMetadata;
+#endif
     // mMutex is the mutex used to prevent concurrent access to the member
     // variables of SurfaceTexture objects. It must be locked whenever the
     // member variables are accessed.

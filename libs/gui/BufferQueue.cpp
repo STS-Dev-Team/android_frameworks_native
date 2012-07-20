@@ -551,8 +551,14 @@ status_t BufferQueue::setSynchronousMode(bool enabled) {
     return err;
 }
 
+#ifdef OMAP_ENHANCEMENT_CPCAM
+status_t BufferQueue::queueBuffer(int buf,
+        const QueueBufferInput& input, QueueBufferOutput* output,
+        const sp<IMemory>& metadata) {
+#else
 status_t BufferQueue::queueBuffer(int buf,
         const QueueBufferInput& input, QueueBufferOutput* output) {
+#endif
     ATRACE_CALL();
     ATRACE_BUFFER_INDEX(buf);
 
@@ -646,6 +652,9 @@ status_t BufferQueue::queueBuffer(int buf,
         mSlots[buf].mFrameNumber = mFrameCounter;
 #ifdef OMAP_ENHANCEMENT
         mSlots[buf].mLayout = mNextLayout;
+#endif
+#ifdef OMAP_ENHANCEMENT_CPCAM
+        mSlots[buf].mMetadata = metadata;
 #endif
 
         mBufferHasBeenQueued = true;
@@ -897,6 +906,9 @@ status_t BufferQueue::acquireBuffer(BufferItem *buffer) {
         buffer->mScalingMode = mSlots[buf].mScalingMode;
         buffer->mFrameNumber = mSlots[buf].mFrameNumber;
         buffer->mTimestamp = mSlots[buf].mTimestamp;
+#ifdef OMAP_ENHANCEMENT_CPCAM
+        buffer->mMetadata = mSlots[buf].mMetadata;
+#endif
         buffer->mBuf = buf;
 #ifdef OMAP_ENHANCEMENT
         buffer->mLayout = mSlots[buf].mLayout;
