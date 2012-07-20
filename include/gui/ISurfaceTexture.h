@@ -175,6 +175,11 @@ protected:
     virtual status_t setLayout(uint32_t layout) = 0;
 #endif
 
+#ifdef OMAP_ENHANCEMENT_CPCAM
+    // updateAndGetCurrent gets the latest buffer and gives the ownership
+    // of the buffer to the client
+    virtual status_t updateAndGetCurrent(sp<GraphicBuffer>* buf) = 0;
+#endif
 };
 
 // ----------------------------------------------------------------------------

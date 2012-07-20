@@ -84,6 +84,9 @@ private:
     int dispatchSetUsage(va_list args);
     int dispatchLock(va_list args);
     int dispatchUnlockAndPost(va_list args);
+#ifdef OMAP_ENHANCEMENT_CPCAM
+    int dispatchUpdateAndGetCurrent(va_list args);
+#endif
 
 #ifdef OMAP_ENHANCEMENT
     int dispatchSetBuffersLayout(va_list args);
@@ -113,6 +116,9 @@ protected:
     virtual int unlockAndPost();
 #ifdef OMAP_ENHANCEMENT
     virtual int setBuffersLayout(uint32_t layout);
+#endif
+#ifdef OMAP_ENHANCEMENT_CPCAM
+    virtual int updateAndGetCurrent(ANativeWindowBuffer** buffer);
 #endif
 
     enum { NUM_BUFFER_SLOTS = BufferQueue::NUM_BUFFER_SLOTS };
@@ -211,6 +217,12 @@ private:
 
     // must be accessed from lock/unlock thread only
     Region mDirtyRegion;
+
+#ifdef OMAP_ENHANCEMENT_CPCAM
+    // mCurrentBuffer contains the current buffer from SurfaceTexture
+    // used in updateAndGetCurrent().
+    sp<GraphicBuffer> mCurrentBuffer;
+#endif
 };
 
 }; // namespace android
