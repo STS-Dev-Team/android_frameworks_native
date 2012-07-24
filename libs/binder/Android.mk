@@ -29,12 +29,33 @@ sources := \
     ProcessState.cpp \
     Static.cpp
 
+ifeq ($(BOARD_NEEDS_MEMORYHEAPPMEM),true)
+sources += \
+    MemoryHeapPmem.cpp
+endif
+
+ifeq ($(TARGET_USES_ION),true)
+    sources += MemoryHeapIon.cpp
+endif
+
 LOCAL_PATH:= $(call my-dir)
+
+# Note about gingerbread compatibility : Require a global cflag,
+# several projects use binder's IMemory.h and MemoryHeapBase.h
+# COMMON_GLOBAL_CFLAGS += -DBINDER_COMPAT
 
 include $(CLEAR_VARS)
 LOCAL_LDLIBS += -lpthread
 LOCAL_MODULE := libbinder
 LOCAL_SHARED_LIBRARIES := liblog libcutils libutils
+
+ifeq ($(EXYNOS4_ENHANCEMENTS), true)
+LOCAL_SHARED_LIBRARIES += libsamsungion
+LOCAL_CFLAGS += -DUSE_SAMSUNG_V4L2_ION -DEXYNOS4_ENHANCEMENTS
+sources += MemoryHeapBaseIon.cpp
+LOCAL_C_INCLUDES := $(TARGET_HAL_PATH)/include
+endif
+
 LOCAL_SRC_FILES := $(sources)
 include $(BUILD_SHARED_LIBRARY)
 

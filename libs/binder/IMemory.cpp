@@ -32,6 +32,10 @@
 #include <binder/Parcel.h>
 #include <utils/CallStack.h>
 
+#ifdef USE_SAMSUNG_V4L2_ION
+#include "ion.h"
+#endif
+
 #define VERBOSE   0
 
 namespace android {
@@ -81,7 +85,9 @@ public:
     virtual void* getBase() const;
     virtual size_t getSize() const;
     virtual uint32_t getFlags() const;
+#ifndef BINDER_COMPAT
     virtual uint32_t getOffset() const;
+#endif
 
 private:
     friend class IMemory;
@@ -108,9 +114,14 @@ private:
     mutable void*       mBase;
     mutable size_t      mSize;
     mutable uint32_t    mFlags;
+#ifndef BINDER_COMPAT
     mutable uint32_t    mOffset;
+#endif
     mutable bool        mRealHeap;
     mutable Mutex       mLock;
+#ifdef QCOM_HARDWARE
+    mutable int         mIonFd;
+#endif
 };
 
 // ----------------------------------------------------------------------------
@@ -231,8 +242,15 @@ status_t BnMemory::onTransact(
 
 BpMemoryHeap::BpMemoryHeap(const sp<IBinder>& impl)
     : BpInterface<IMemoryHeap>(impl),
-        mHeapId(-1), mBase(MAP_FAILED), mSize(0), mFlags(0), mOffset(0), mRealHeap(false)
+        mHeapId(-1), mBase(MAP_FAILED), mSize(0), mFlags(0),
+#ifndef BINDER_COMPAT
+        mOffset(0),
+#endif
+        mRealHeap(false)
 {
+#ifdef QCOM_HARDWARE
+    mIonFd = open("/dev/ion", O_RDONLY);
+#endif
 }
 
 BpMemoryHeap::~BpMemoryHeap() {
@@ -259,6 +277,10 @@ BpMemoryHeap::~BpMemoryHeap() {
             free_heap(binder);
         }
     }
+#ifdef QCOM_HARDWARE
+    if (mIonFd > 0)
+        close(mIonFd);
+#endif
 }
 
 void BpMemoryHeap::assertMapped() const
@@ -272,7 +294,9 @@ void BpMemoryHeap::assertMapped() const
             if (mHeapId == -1) {
                 mBase   = heap->mBase;
                 mSize   = heap->mSize;
+#ifndef BINDER_COMPAT
                 mOffset = heap->mOffset;
+#endif
                 android_atomic_write( dup( heap->mHeapId ), &mHeapId );
             }
         } else {
@@ -296,10 +320,23 @@ void BpMemoryHeap::assertReallyMapped() const
         int parcel_fd = reply.readFileDescriptor();
         ssize_t size = reply.readInt32();
         uint32_t flags = reply.readInt32();
+#ifndef BINDER_COMPAT
         uint32_t offset = reply.readInt32();
+#else
+        uint32_t offset = 0;
+#endif
 
         ALOGE_IF(err, "binder=%p transaction failed fd=%d, size=%ld, err=%d (%s)",
                 asBinder().get(), parcel_fd, size, err, strerror(-err));
+
+#ifdef USE_SAMSUNG_V4L2_ION
+        int ion_client = -1;
+        if (flags & USE_ION_FD) {
+            ion_client = ion_client_create();
+            ALOGE_IF(ion_client < 0, "BpMemoryHeap : ion client creation error");
+        }
+#endif
+
 
         int fd = dup( parcel_fd );
         ALOGE_IF(fd==-1, "cannot dup fd=%d, size=%ld, err=%d (%s)",
@@ -313,6 +350,15 @@ void BpMemoryHeap::assertReallyMapped() const
         Mutex::Autolock _l(mLock);
         if (mHeapId == -1) {
             mRealHeap = true;
+#ifdef USE_SAMSUNG_V4L2_ION
+            if (flags & USE_ION_FD) {
+                if (ion_client < 0) {
+                    mBase = MAP_FAILED;
+                } else {
+                    mBase = ion_map(fd, size, offset);
+                }
+            } else // fallback mmap
+#endif
             mBase = mmap(0, size, access, MAP_SHARED, fd, offset);
             if (mBase == MAP_FAILED) {
                 ALOGE("cannot map BpMemoryHeap (binder=%p), size=%ld, fd=%d (%s)",
@@ -321,7 +367,9 @@ void BpMemoryHeap::assertReallyMapped() const
             } else {
                 mSize = size;
                 mFlags = flags;
+#ifndef BINDER_COMPAT
                 mOffset = offset;
+#endif
                 android_atomic_write(fd, &mHeapId);
             }
         }
@@ -348,10 +396,12 @@ uint32_t BpMemoryHeap::getFlags() const {
     return mFlags;
 }
 
+#ifndef BINDER_COMPAT
 uint32_t BpMemoryHeap::getOffset() const {
     assertMapped();
     return mOffset;
 }
+#endif
 
 // ---------------------------------------------------------------------------
 
@@ -372,7 +422,9 @@ status_t BnMemoryHeap::onTransact(
             reply->writeFileDescriptor(getHeapID());
             reply->writeInt32(getSize());
             reply->writeInt32(getFlags());
+#ifndef BINDER_COMPAT
             reply->writeInt32(getOffset());
+#endif
             return NO_ERROR;
         } break;
         default:

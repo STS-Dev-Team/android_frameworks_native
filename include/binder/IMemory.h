@@ -36,14 +36,19 @@ public:
 
     // flags returned by getFlags()
     enum {
-        READ_ONLY   = 0x00000001
+        READ_ONLY   = 0x00000001,
+#ifdef EXYNOS4_ENHANCEMENTS
+        USE_ION_FD  = 0x00000008
+#endif
     };
 
     virtual int         getHeapID() const = 0;
     virtual void*       getBase() const = 0;
     virtual size_t      getSize() const = 0;
     virtual uint32_t    getFlags() const = 0;
+#ifndef BINDER_COMPAT
     virtual uint32_t    getOffset() const = 0;
+#endif
 
     // these are there just for backward source compatibility
     int32_t heapID() const { return getHeapID(); }
