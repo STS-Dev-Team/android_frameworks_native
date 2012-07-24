@@ -91,6 +91,7 @@ private:
 #ifdef OMAP_ENHANCEMENT_CPCAM
     int dispatchUpdateAndGetCurrent(va_list args);
     int dispatchSetBuffersMetadata(va_list args);
+    int dispatchAddBufferSlot(va_list args);
 #endif
 
 #ifdef OMAP_ENHANCEMENT
@@ -125,6 +126,7 @@ protected:
 #ifdef OMAP_ENHANCEMENT_CPCAM
     virtual int updateAndGetCurrent(ANativeWindowBuffer** buffer);
     virtual int setBuffersMetadata(const sp<MemoryBase>& metadata);
+    virtual int addBufferSlot(const sp<GraphicBuffer>& buffer);
 #endif
 
     enum { NUM_BUFFER_SLOTS = BufferQueue::NUM_BUFFER_SLOTS };

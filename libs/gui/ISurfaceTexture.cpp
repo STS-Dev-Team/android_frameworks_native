@@ -45,6 +45,7 @@ enum {
 #endif
 #ifdef OMAP_ENHANCEMENT_CPCAM
     UPDATE_AND_GET_CURRENT,
+    ADD_BUFFER_SLOT,
 #endif
 };
 
@@ -215,6 +216,18 @@ public:
         result = reply.readInt32();
         return result;
     }
+
+    virtual int addBufferSlot(const sp<GraphicBuffer>& buffer) {
+        Parcel data, reply;
+        data.writeInterfaceToken(ISurfaceTexture::getInterfaceDescriptor());
+        data.write(*buffer);
+        status_t result = remote()->transact(ADD_BUFFER_SLOT, data, &reply);
+        if (result != NO_ERROR) {
+            return -1;
+        }
+        int bufferIndex = reply.readInt32();
+        return bufferIndex;
+    }
 #endif
 };
 
@@ -336,6 +349,14 @@ status_t BnSurfaceTexture::onTransact(
                 reply->write(*buffer);
             }
             reply->writeInt32(result);
+            return NO_ERROR;
+        } break;
+       case ADD_BUFFER_SLOT: {
+            CHECK_INTERFACE(ISurfaceTexture, data, reply);
+            sp<GraphicBuffer> buffer = new GraphicBuffer();
+            data.read(*buffer);
+            int bufferIndex = addBufferSlot(buffer);
+            reply->writeInt32(bufferIndex);
             return NO_ERROR;
         } break;
 #endif
