@@ -193,6 +193,12 @@ public:
 
         // mBuf is the slot index of this buffer
         int mBuf;
+
+#ifdef OMAP_ENHANCEMENT
+        // layout for the buffers
+        uint32_t mLayout;
+#endif
+
     };
 
     // The following public functions is the consumer facing interface
@@ -256,6 +262,11 @@ public:
 
     // setTransformHint bakes in rotation to buffers so overlays can be used
     status_t setTransformHint(uint32_t hint);
+
+#ifdef OMAP_ENHANCEMENT
+    //sets the layout for the buffers
+    status_t setLayout(uint32_t layout);
+#endif
 
 private:
     // freeBufferLocked frees the resources (both GraphicBuffer and EGLImage)
@@ -376,6 +387,11 @@ private:
 
         // Indicates whether this buffer needs to be cleaned up by consumer
         bool mNeedsCleanupOnRelease;
+
+#ifdef OMAP_ENHANCEMENT
+       // next layout for the buffers
+       uint32_t mLayout;
+#endif
     };
 
     // mSlots is the array of buffer slots that must be mirrored on the client
@@ -468,6 +484,11 @@ private:
     // mFrameCounter is the free running counter, incremented for every buffer queued
     // with the surface Texture.
     uint64_t mFrameCounter;
+
+#ifdef OMAP_ENHANCEMENT
+    // next layout for the buffers
+    uint32_t mNextLayout;
+#endif
 
     // mBufferHasBeenQueued is true once a buffer has been queued.  It is reset
     // by changing the buffer count.

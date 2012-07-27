@@ -169,6 +169,12 @@ protected:
     // This method will fail if the the SurfaceTexture is not currently
     // connected to the specified client API.
     virtual status_t disconnect(int api) = 0;
+
+#ifdef OMAP_ENHANCEMENT
+    //method to set the buffer layout
+    virtual status_t setLayout(uint32_t layout) = 0;
+#endif
+
 };
 
 // ----------------------------------------------------------------------------

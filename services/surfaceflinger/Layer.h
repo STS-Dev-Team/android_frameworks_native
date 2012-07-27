@@ -122,6 +122,9 @@ private:
     bool mRefreshPending;
     bool mFrameLatencyNeeded;
     int mFrameLatencyOffset;
+#ifdef OMAP_ENHANCEMENT
+    uint32_t mCurrentLayout;
+#endif
 
     struct Statistics {
         Statistics() : timestamp(0), set(0), vsync(0) { }

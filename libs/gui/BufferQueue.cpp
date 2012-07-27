@@ -99,6 +99,9 @@ BufferQueue::BufferQueue(  bool allowSynchronousMode, int bufferCount ) :
     mBufferHasBeenQueued(false),
     mDefaultBufferFormat(0),
     mConsumerUsageBits(0),
+#ifdef OMAP_ENHANCEMENT
+    mNextLayout(NATIVE_WINDOW_BUFFERS_LAYOUT_PROGRESSIVE),
+#endif
     mTransformHint(0)
 {
     // Choose a name using the PID and a process-unique ID.
@@ -178,6 +181,14 @@ status_t BufferQueue::setTransformHint(uint32_t hint) {
     mTransformHint = hint;
     return OK;
 }
+
+#ifdef OMAP_ENHANCEMENT
+status_t BufferQueue::setLayout(uint32_t layout) {
+    Mutex::Autolock lock(mMutex);
+    mNextLayout = layout;
+    return OK;
+}
+#endif
 
 status_t BufferQueue::setBufferCount(int bufferCount) {
     ST_LOGV("setBufferCount: count=%d", bufferCount);
@@ -633,6 +644,9 @@ status_t BufferQueue::queueBuffer(int buf,
         mSlots[buf].mScalingMode = scalingMode;
         mFrameCounter++;
         mSlots[buf].mFrameNumber = mFrameCounter;
+#ifdef OMAP_ENHANCEMENT
+        mSlots[buf].mLayout = mNextLayout;
+#endif
 
         mBufferHasBeenQueued = true;
         mDequeueCondition.broadcast();
@@ -876,6 +890,9 @@ status_t BufferQueue::acquireBuffer(BufferItem *buffer) {
         buffer->mFrameNumber = mSlots[buf].mFrameNumber;
         buffer->mTimestamp = mSlots[buf].mTimestamp;
         buffer->mBuf = buf;
+#ifdef OMAP_ENHANCEMENT
+        buffer->mLayout = mSlots[buf].mLayout;
+#endif
         mSlots[buf].mAcquireCalled = true;
 
         mSlots[buf].mBufferState = BufferSlot::ACQUIRED;
