@@ -42,7 +42,11 @@ static const int kMaxSysfsEntrySize = 256;
 static int read_sysentry(const char* sysPath, char* data, size_t size) {
     int fd = open(sysPath, O_RDONLY);
     if (fd == -1) {
-        ALOGE("Could not open sysfs entry(%s)", sysPath);
+        if (errno == ENOENT) {
+            ALOGI("Could not open sysfs entry(%s)", sysPath);
+        } else {
+            ALOGE("Error during open sysfs entry(%s)", sysPath);
+        }
         return -1;
     }
     size_t bytesread = read(fd, data, size);
@@ -70,17 +74,21 @@ status_t S3DHardware::initCheck() const {
 void S3DHardware::init()
 {
     char data[kMaxSysfsEntrySize];
-    read_sysentry(kS3DCapableFileName, data, kMaxSysfsEntrySize);
 
-    if(!strncmp(data, kZeroString, sizeof(kZeroString)-1)) {
+    if (read_sysentry(kS3DCapableFileName, data, kMaxSysfsEntrySize) <= 0) {
         return;
     }
 
-    if (read_sysentry(kS3DSwitchFileName, data, kMaxSysfsEntrySize)) {
+    //Is display S3D capable?
+    if (!strncmp(data, kZeroString, sizeof(kZeroString)-1)) {
+        return;
+    }
+
+    if (read_sysentry(kS3DSwitchFileName, data, kMaxSysfsEntrySize) > 0) {
         mSwitcheable = !strncmp(data, kOneString, sizeof(kOneString)-1);
     }
 
-    if (read_sysentry(kS3DOrderFileName, data, kMaxSysfsEntrySize)) {
+    if (read_sysentry(kS3DOrderFileName, data, kMaxSysfsEntrySize) > 0) {
         if (strncmp(data, kOneString, sizeof(kOneString)-1)) {
             mOrder = eLeftViewFirst;
         } else {
@@ -88,7 +96,7 @@ void S3DHardware::init()
         }
     }
 
-    if (read_sysentry(kS3DTypeFileName, data, kMaxSysfsEntrySize)) {
+    if (read_sysentry(kS3DTypeFileName, data, kMaxSysfsEntrySize) > 0) {
         if(!strncmp(data, kTopBottomName, sizeof(kTopBottomName)-1)) {
             mType = eTopBottom;
         } else if(!strncmp(data, kSbSName, sizeof(kSbSName)-1)) {
@@ -112,7 +120,7 @@ void S3DHardware::forceConfiguration(S3DLayoutType type, S3DLayoutOrder order, b
 
 status_t S3DHardware::enableS3D(bool state)
 {
-    if(mType == eMono || mCurrentState == state) {
+    if (mType == eMono || mCurrentState == state) {
         return NO_ERROR;
     }
 
