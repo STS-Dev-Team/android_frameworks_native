@@ -271,6 +271,7 @@ status_t S3DSurfaceFlinger::onTransact(uint32_t code, const Parcel& data,
         case SET_SURF_CONFIG:
         case GET_PREF_LAYOUT:
         case FORCE_S3D_DISPLAY_CONFIG:
+        case SET_WINDOW_CONFIG:
             //We don't check specific permissions to access surface flinger
             //as we are not returning an interface to surfaceflinger or internal
             //layers and we are not providing any capture services
@@ -295,6 +296,29 @@ status_t S3DSurfaceFlinger::onTransact(uint32_t code, const Parcel& data,
                     mS3DLayers.add(binder,layerSub);
                 } else {
                     mS3DLayers.removeItem(binder);
+                }
+            }
+        } break;
+        case SET_WINDOW_CONFIG: {
+            Mutex::Autolock _l(mStateLock);
+            String8 windowName(data.readString8());
+            sp<OmapLayer> layerSub;
+            for (size_t i = 0; i < mLayerMap.size(); i++) {
+                sp<Layer> layer(mLayerMap.valueAt(i).promote());
+                if (layer.get() && windowName == layer->getName()) {
+                    layerSub = static_cast<OmapLayer*>(layer.get());
+                    break;
+                }
+            }
+            if (layerSub != 0) {
+                S3DLayoutType type = static_cast<S3DLayoutType>(data.readInt32());
+                S3DLayoutOrder order = static_cast<S3DLayoutOrder>(data.readInt32());
+                S3DRenderMode mode = static_cast<S3DRenderMode>(data.readInt32());
+                layerSub->setConfig(type, order, mode);
+                if (layerSub->isS3D()) {
+                    mS3DLayers.add(layerSub->getSurfaceBinder(),layerSub);
+                } else {
+                    mS3DLayers.removeItem(layerSub->getSurfaceBinder());
                 }
             }
         } break;

@@ -60,7 +60,8 @@ public:
     enum {
         SET_SURF_CONFIG = 4000,
         GET_PREF_LAYOUT = 4001,
-        FORCE_S3D_DISPLAY_CONFIG = 4002
+        FORCE_S3D_DISPLAY_CONFIG = 4002,
+        SET_WINDOW_CONFIG = 4003,
     };
     //Handles custom codes but delegates all else to base class onTransact
     virtual status_t onTransact(
