@@ -106,6 +106,14 @@ uint32_t LayerScreenshot::doTransaction(uint32_t flags)
     return LayerBaseClient::doTransaction(flags);
 }
 
+#ifdef OMAP_ENHANCEMENT_S3D
+void LayerScreenshot::drawRegion(const Region& clip, int hw_w, int hw_h) const
+{
+    glTexCoordPointer(2, GL_FLOAT, 0, mTexCoords);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, mNumVertices);
+}
+#endif
+
 void LayerScreenshot::onDraw(const Region& clip) const
 {
     const State& s(drawingState());
@@ -133,10 +141,15 @@ void LayerScreenshot::onDraw(const Region& clip) const
         glMatrixMode(GL_MODELVIEW);
 
         glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+#ifndef OMAP_ENHANCEMENT_S3D
         glTexCoordPointer(2, GL_FLOAT, 0, mTexCoords);
+#endif
         glVertexPointer(2, GL_FLOAT, 0, mVertices);
+#ifdef OMAP_ENHANCEMENT_S3D
+        drawRegion(clip, hw.getWidth(), fbHeight);
+#else
         glDrawArrays(GL_TRIANGLE_FAN, 0, mNumVertices);
-
+#endif
         glDisable(GL_BLEND);
         glDisable(GL_TEXTURE_2D);
         glDisableClientState(GL_TEXTURE_COORD_ARRAY);

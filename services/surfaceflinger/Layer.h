@@ -96,6 +96,9 @@ protected:
 
 private:
     friend class SurfaceTextureLayer;
+#ifdef OMAP_ENHANCEMENT_S3D
+    friend class OmapLayer;
+#endif
     void onFrameQueued();
     virtual sp<ISurface> createSurface();
     uint32_t getEffectiveUsage(uint32_t usage) const;
