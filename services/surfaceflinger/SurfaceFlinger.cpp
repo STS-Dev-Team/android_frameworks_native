@@ -509,6 +509,7 @@ void SurfaceFlinger::postFramebuffer()
         mVisibleLayersSortedByZ[i]->onLayerDisplayed();
     }
 
+
     mLastSwapBufferTime = systemTime() - now;
     mDebugInSwapBuffers = 0;
     mSwapRegion.clear();
@@ -575,7 +576,9 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
             // Currently unused: const uint32_t flags = mCurrentState.orientationFlags;
             GraphicPlane& plane(graphicPlane(dpy));
             plane.setOrientation(orientation);
-
+#ifdef QCOMHW
+            const Transform& planeTransform(plane.transform());
+#endif
             // update the shared control block
             const DisplayHardware& hw(plane.displayHardware());
             volatile display_cblk_t* dcblk = mServerCblk->displays + dpy;
@@ -597,6 +600,13 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
                 mHdmiClient->setHdmiRotate(90, overlayLayerCount);
             else
                 mHdmiClient->setHdmiRotate(0, overlayLayerCount);
+#endif
+#ifdef QCOMHW
+            //set the new orientation to HWC
+            HWComposer& hwc(graphicPlane(0).displayHardware().getHwComposer());
+            hwc.eventControl(DisplayHardware::EVENT_ORIENTATION,
+                                              planeTransform.getOrientation());
+
 #endif
         }
 
