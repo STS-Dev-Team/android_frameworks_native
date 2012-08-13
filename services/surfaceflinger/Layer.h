@@ -96,6 +96,9 @@ protected:
 
 private:
     friend class SurfaceTextureLayer;
+#ifdef OMAP_ENHANCEMENT_S3D
+    friend class OmapLayer;
+#endif
     void onFrameQueued();
     virtual sp<ISurface> createSurface();
     uint32_t getEffectiveUsage(uint32_t usage) const;
@@ -122,6 +125,9 @@ private:
     bool mRefreshPending;
     bool mFrameLatencyNeeded;
     int mFrameLatencyOffset;
+#ifdef OMAP_ENHANCEMENT
+    uint32_t mCurrentLayout;
+#endif
 
     struct Statistics {
         Statistics() : timestamp(0), set(0), vsync(0) { }

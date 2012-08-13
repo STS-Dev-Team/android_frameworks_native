@@ -40,6 +40,9 @@ enum {
     SET_SYNCHRONOUS_MODE,
     CONNECT,
     DISCONNECT,
+#ifdef OMAP_ENHANCEMENT
+    SET_LAYOUT,
+#endif
 };
 
 
@@ -169,6 +172,21 @@ public:
         result = reply.readInt32();
         return result;
     }
+
+#ifdef OMAP_ENHANCEMENT
+    virtual status_t setLayout(uint32_t layout) {
+        Parcel data, reply;
+        data.writeInterfaceToken(ISurfaceTexture::getInterfaceDescriptor());
+        data.writeInt32((int32_t)layout);
+        status_t result = remote()->transact(SET_LAYOUT, data, &reply);
+        if (result != NO_ERROR) {
+            return result;
+        }
+        result = reply.readInt32();
+        return result;
+    }
+#endif
+
 };
 
 IMPLEMENT_META_INTERFACE(SurfaceTexture, "android.gui.SurfaceTexture");
@@ -262,6 +280,17 @@ status_t BnSurfaceTexture::onTransact(
             reply->writeInt32(res);
             return NO_ERROR;
         } break;
+
+#ifdef OMAP_ENHANCEMENT
+        case SET_LAYOUT: {
+            uint32_t layout;
+            CHECK_INTERFACE(ISurfaceTexture, data, reply);
+            layout = (uint32_t)data.readInt32();
+            status_t result = setLayout(layout);
+            reply->writeInt32(result);
+            return NO_ERROR;
+        } break;
+#endif
     }
     return BBinder::onTransact(code, data, reply, flags);
 }

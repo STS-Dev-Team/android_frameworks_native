@@ -364,6 +364,11 @@ int SurfaceTextureClient::perform(int operation, va_list args)
     case NATIVE_WINDOW_API_DISCONNECT:
         res = dispatchDisconnect(args);
         break;
+#ifdef OMAP_ENHANCEMENT
+    case NATIVE_WINDOW_SET_BUFFERS_LAYOUT:
+        res = dispatchSetBuffersLayout(args);
+        break;
+#endif
     default:
         res = NAME_NOT_FOUND;
         break;
@@ -449,6 +454,12 @@ int SurfaceTextureClient::dispatchUnlockAndPost(va_list args) {
     return unlockAndPost();
 }
 
+#ifdef OMAP_ENHANCEMENT
+int SurfaceTextureClient::dispatchSetBuffersLayout(va_list args) {
+    uint32_t bufLayout = va_arg(args, uint32_t);
+    return setBuffersLayout(bufLayout);
+}
+#endif
 
 int SurfaceTextureClient::connect(int api) {
     ATRACE_CALL();
@@ -635,6 +646,16 @@ int SurfaceTextureClient::setBuffersTimestamp(int64_t timestamp)
     mTimestamp = timestamp;
     return NO_ERROR;
 }
+
+#ifdef OMAP_ENHANCEMENT
+int SurfaceTextureClient::setBuffersLayout(uint32_t bufLayout)
+{
+    ALOGV("SurfaceTextureClient::setBuffersLayout");
+    Mutex::Autolock lock(mMutex);
+    status_t err = mSurfaceTexture->setLayout(bufLayout);
+    return NO_ERROR;
+}
+#endif
 
 void SurfaceTextureClient::freeAllBuffers() {
     for (int i = 0; i < NUM_BUFFER_SLOTS; i++) {

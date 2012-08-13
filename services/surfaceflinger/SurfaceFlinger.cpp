@@ -1853,6 +1853,18 @@ status_t SurfaceFlinger::renderScreenToTexture(DisplayID dpy,
     return renderScreenToTextureLocked(dpy, textureName, uOut, vOut);
 }
 
+#ifdef OMAP_ENHANCEMENT_S3D
+void SurfaceFlinger::drawLayersForScreenshotLocked()
+{
+    const Vector< sp<LayerBase> >& layers(mVisibleLayersSortedByZ);
+    const size_t count = layers.size();
+    for (size_t i=0 ; i<count ; ++i) {
+        const sp<LayerBase>& layer(layers[i]);
+        layer->drawForSreenShot();
+    }
+}
+#endif
+
 status_t SurfaceFlinger::renderScreenToTextureLocked(DisplayID dpy,
         GLuint* textureName, GLfloat* uOut, GLfloat* vOut)
 {
@@ -1900,13 +1912,16 @@ status_t SurfaceFlinger::renderScreenToTextureLocked(DisplayID dpy,
     glClear(GL_COLOR_BUFFER_BIT);
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
+#ifdef OMAP_ENHANCEMENT_S3D
+    drawLayersForScreenshotLocked();
+#else
     const Vector< sp<LayerBase> >& layers(mVisibleLayersSortedByZ);
     const size_t count = layers.size();
     for (size_t i=0 ; i<count ; ++i) {
         const sp<LayerBase>& layer(layers[i]);
         layer->drawForSreenShot();
     }
-
+#endif
     hw.compositionComplete();
 
     // back to main framebuffer

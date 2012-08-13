@@ -60,6 +60,9 @@ Layer::Layer(SurfaceFlinger* flinger,
         mQueuedFrames(0),
         mCurrentTransform(0),
         mCurrentScalingMode(NATIVE_WINDOW_SCALING_MODE_FREEZE),
+#ifdef OMAP_ENHANCEMENT
+        mCurrentLayout(NATIVE_WINDOW_BUFFERS_LAYOUT_PROGRESSIVE),
+#endif
         mCurrentOpacity(true),
         mRefreshPending(false),
         mFrameLatencyNeeded(false),
@@ -312,6 +315,9 @@ void Layer::setGeometry(hwc_layer_t* hwcl)
     hwcl->sourceCrop.top    = crop.top;
     hwcl->sourceCrop.right  = crop.right;
     hwcl->sourceCrop.bottom = crop.bottom;
+#ifdef OMAP_ENHANCEMENT
+    hwcl->flags |= mCurrentLayout << 24;
+#endif
 }
 
 void Layer::setPerFrameData(hwc_layer_t* hwcl) {
@@ -667,13 +673,23 @@ void Layer::lockPageFlip(bool& recomputeVisibleRegions)
         Rect crop(mSurfaceTexture->getCurrentCrop());
         const uint32_t transform(mSurfaceTexture->getCurrentTransform());
         const uint32_t scalingMode(mSurfaceTexture->getCurrentScalingMode());
+#ifdef OMAP_ENHANCEMENT
+        const uint32_t layout(mSurfaceTexture->getCurrentLayout());
+#endif
+
         if ((crop != mCurrentCrop) ||
             (transform != mCurrentTransform) ||
+#ifdef OMAP_ENHANCEMENT
+            (layout != mCurrentLayout) ||
+#endif
             (scalingMode != mCurrentScalingMode))
         {
             mCurrentCrop = crop;
             mCurrentTransform = transform;
             mCurrentScalingMode = scalingMode;
+#ifdef OMAP_ENHANCEMENT
+            mCurrentLayout = layout;
+#endif
             mFlinger->invalidateHwcGeometry();
         }
 
