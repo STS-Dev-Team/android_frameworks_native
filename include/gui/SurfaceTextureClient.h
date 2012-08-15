@@ -28,6 +28,10 @@
 #include <utils/threads.h>
 #include <utils/KeyedVector.h>
 
+#ifdef OMAP_ENHANCEMENT_CPCAM
+#include <binder/MemoryBase.h>
+#endif
+
 struct ANativeWindow_Buffer;
 
 namespace android {
@@ -84,6 +88,11 @@ private:
     int dispatchSetUsage(va_list args);
     int dispatchLock(va_list args);
     int dispatchUnlockAndPost(va_list args);
+#ifdef OMAP_ENHANCEMENT_CPCAM
+    int dispatchUpdateAndGetCurrent(va_list args);
+    int dispatchSetBuffersMetadata(va_list args);
+    int dispatchAddBufferSlot(va_list args);
+#endif
 
 #ifdef OMAP_ENHANCEMENT
     int dispatchSetBuffersLayout(va_list args);
@@ -113,6 +122,11 @@ protected:
     virtual int unlockAndPost();
 #ifdef OMAP_ENHANCEMENT
     virtual int setBuffersLayout(uint32_t layout);
+#endif
+#ifdef OMAP_ENHANCEMENT_CPCAM
+    virtual int updateAndGetCurrent(ANativeWindowBuffer** buffer);
+    virtual int setBuffersMetadata(const sp<MemoryBase>& metadata);
+    virtual int addBufferSlot(const sp<GraphicBuffer>& buffer);
 #endif
 
     enum { NUM_BUFFER_SLOTS = BufferQueue::NUM_BUFFER_SLOTS };
@@ -199,6 +213,10 @@ private:
     // one buffer behind the producer.
     mutable bool mConsumerRunningBehind;
 
+#ifdef OMAP_ENHANCEMENT_CPCAM
+    // Metadata for the current texture
+    sp<MemoryBase> mMetadata;
+#endif
     // mMutex is the mutex used to prevent concurrent access to the member
     // variables of SurfaceTexture objects. It must be locked whenever the
     // member variables are accessed.
@@ -220,6 +238,12 @@ private:
     // GRALLOC_USAGE_PRIVATE_EXTERNAL_CC,
     // It is initialized to 0
     uint32_t mReqExtUsage;
+
+#ifdef OMAP_ENHANCEMENT_CPCAM
+    // mCurrentBuffer contains the current buffer from SurfaceTexture
+    // used in updateAndGetCurrent().
+    sp<GraphicBuffer> mCurrentBuffer;
+#endif
 };
 
 }; // namespace android
