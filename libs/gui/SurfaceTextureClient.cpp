@@ -358,6 +358,11 @@ int SurfaceTextureClient::perform(int operation, va_list args)
     case NATIVE_WINDOW_SET_BUFFERS_FORMAT:
         res = dispatchSetBuffersFormat(args);
         break;
+#ifdef QCOM_HARDWARE
+    case NATIVE_WINDOW_SET_BUFFERS_SIZE:
+        res = dispatchSetBuffersSize(args);
+        break;
+#endif
     case NATIVE_WINDOW_LOCK:
         res = dispatchLock(args);
         break;
@@ -445,6 +450,13 @@ int SurfaceTextureClient::dispatchSetBuffersFormat(va_list args) {
     int f = va_arg(args, int);
     return setBuffersFormat(f);
 }
+
+#ifdef QCOM_HARDWARE
+int SurfaceTextureClient::dispatchSetBuffersSize(va_list args) {
+    int size = va_arg(args, int);
+    return setBuffersSize(size);
+}
+#endif
 
 int SurfaceTextureClient::dispatchSetScalingMode(va_list args) {
     int m = va_arg(args, int);
@@ -646,6 +658,21 @@ int SurfaceTextureClient::setBuffersFormat(int format)
     return NO_ERROR;
 }
 
+#ifdef QCOM_HARDWARE
+int SurfaceTextureClient::setBuffersSize(int size)
+{
+    ATRACE_CALL();
+    ALOGV("SurfaceTextureClient::setBuffersSize");
+
+    if (size<0)
+        return BAD_VALUE;
+
+    Mutex::Autolock lock(mMutex);
+    status_t err = mSurfaceTexture->setBuffersSize(size);
+    return NO_ERROR;
+}
+#endif
+
 int SurfaceTextureClient::setScalingMode(int mode)
 {
     ATRACE_CALL();
@@ -798,16 +825,31 @@ status_t SurfaceTextureClient::lock(
                     backBuffer->height == frontBuffer->height &&
                     backBuffer->format == frontBuffer->format);
 
+#ifdef QCOMHW
+            int backBufferSlot(getSlotFromBufferLocked(backBuffer.get()));
+#endif
             if (canCopyBack) {
                 // copy the area that is invalid and not repainted this round
+#ifdef QCOMHW
+                Mutex::Autolock lock(mMutex);
+                Region oldDirtyRegion;
+                for(int i = 0 ; i < NUM_BUFFER_SLOTS; i++ ) {
+                     if(i != backBufferSlot && !mSlots[i].dirtyRegion.isEmpty())
+                         oldDirtyRegion.orSelf(mSlots[i].dirtyRegion);
+                }
+                const Region copyback(oldDirtyRegion.subtract(newDirtyRegion));
+#else
                 const Region copyback(mDirtyRegion.subtract(newDirtyRegion));
+#endif
                 if (!copyback.isEmpty())
                     copyBlt(backBuffer, frontBuffer, copyback);
             } else {
                 // if we can't copy-back anything, modify the user's dirty
                 // region to make sure they redraw the whole buffer
                 newDirtyRegion.set(bounds);
+#ifndef QCOMHW
                 mDirtyRegion.clear();
+#endif
                 Mutex::Autolock lock(mMutex);
                 for (size_t i=0 ; i<NUM_BUFFER_SLOTS ; i++) {
                     mSlots[i].dirtyRegion.clear();
@@ -817,15 +859,22 @@ status_t SurfaceTextureClient::lock(
 
             { // scope for the lock
                 Mutex::Autolock lock(mMutex);
+#ifdef QCOMHW
+                mSlots[backBufferSlot].dirtyRegion = newDirtyRegion;
+#else
                 int backBufferSlot(getSlotFromBufferLocked(backBuffer.get()));
                 if (backBufferSlot >= 0) {
                     Region& dirtyRegion(mSlots[backBufferSlot].dirtyRegion);
                     mDirtyRegion.subtract(dirtyRegion);
                     dirtyRegion = newDirtyRegion;
                 }
+#endif
             }
 
-            mDirtyRegion.orSelf(newDirtyRegion);
+#ifndef QCOMHW
+           mDirtyRegion.orSelf(newDirtyRegion);
+#endif
+
             if (inOutDirtyBounds) {
                 *inOutDirtyBounds = newDirtyRegion.getBounds();
             }
