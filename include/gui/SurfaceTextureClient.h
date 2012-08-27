@@ -88,6 +88,7 @@ private:
     int dispatchSetUsage(va_list args);
 #ifdef QCOM_HARDWARE
     int dispatchSetBuffersSize(va_list args);
+    int dispatchSetMinUndequeuedBufferCount(va_list args);
 #endif
     int dispatchLock(va_list args);
     int dispatchUnlockAndPost(va_list args);
@@ -111,6 +112,7 @@ protected:
     virtual int setSwapInterval(int interval);
 #ifdef QCOM_HARDWARE
     virtual int setBuffersSize(int size);
+    virtual int setMinUndequeuedBufferCount(int count);
 #endif
 
     virtual int connect(int api);
