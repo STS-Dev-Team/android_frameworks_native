@@ -120,6 +120,9 @@ SurfaceTexture::SurfaceTexture(GLuint tex, bool allowSynchronousMode,
     mEglContext(EGL_NO_CONTEXT),
     mAbandoned(false),
     mCurrentTexture(BufferQueue::INVALID_BUFFER_SLOT),
+#ifdef OMAP_ENHANCEMENT
+    mCurrentLayout(NATIVE_WINDOW_BUFFERS_LAYOUT_PROGRESSIVE),
+#endif
     mAttached(true)
 {
     // Choose a name using the PID and a process-unique ID.
@@ -315,6 +318,9 @@ status_t SurfaceTexture::updateTexImage(BufferRejecter* rejecter) {
         mCurrentTransform = item.mTransform;
         mCurrentScalingMode = item.mScalingMode;
         mCurrentTimestamp = item.mTimestamp;
+#ifdef OMAP_ENHANCEMENT
+        mCurrentLayout = item.mLayout;
+#endif
         computeCurrentTransformMatrix();
     } else  {
         if (err < 0) {
@@ -764,6 +770,24 @@ status_t SurfaceTexture::setTransformHint(uint32_t hint) {
     Mutex::Autolock lock(mMutex);
     return mBufferQueue->setTransformHint(hint);
 }
+
+#ifdef OMAP_ENHANCEMENT
+status_t SurfaceTexture::setLayout(uint32_t layout) {
+    ST_LOGV("SurfaceTexture::setLayout");
+    Mutex::Autolock lock(mMutex);
+
+    if (mAbandoned) {
+       // Nothing to do if we're already abandoned.
+        return NO_INIT;
+    }
+    return mBufferQueue->setLayout(layout);
+}
+
+uint32_t SurfaceTexture::getCurrentLayout() const {
+    Mutex::Autolock lock(mMutex);
+    return mCurrentLayout;
+}
+#endif
 
 // Used for refactoring BufferQueue from SurfaceTexture
 // Should not be in final interface once users of SurfaceTexture are clean up.
