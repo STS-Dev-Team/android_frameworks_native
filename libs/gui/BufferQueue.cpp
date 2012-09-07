@@ -108,8 +108,6 @@ BufferQueue::BufferQueue(  bool allowSynchronousMode, int bufferCount ) :
     mConsumerName = String8::format("unnamed-%d-%d", getpid(), createProcessUniqueId());
 
     ST_LOGV("BufferQueue");
-
-    ALOGI("BufferQueue: minUndequeued=%d", mMinUndequeuedBuffers);
     sp<ISurfaceComposer> composer(ComposerService::getComposerService());
     mGraphicBufferAlloc = composer->createGraphicBufferAlloc();
     if (mGraphicBufferAlloc == 0) {
@@ -193,7 +191,7 @@ status_t BufferQueue::setLayout(uint32_t layout) {
 #endif
 
 status_t BufferQueue::setBufferCount(int bufferCount) {
-    ALOGI("setBufferCount: count=%d", bufferCount);
+    ST_LOGV("setBufferCount: count=%d", bufferCount);
 
     sp<ConsumerListener> listener;
     {
@@ -254,13 +252,6 @@ status_t BufferQueue::setBuffersSize(int size) {
     ST_LOGV("setBuffersSize: size=%d", size);
     Mutex::Autolock lock(mMutex);
     mGraphicBufferAlloc->setGraphicBufferSize(size);
-    return NO_ERROR;
-}
-
-status_t BufferQueue::setMinUndequeuedBufferCount(int count) {
-    ALOGI("setMinUndequeuedBufferCount: count=%d", count);
-    Mutex::Autolock lock(mMutex);
-    mMinUndequeuedBuffers = count;
     return NO_ERROR;
 }
 #endif
