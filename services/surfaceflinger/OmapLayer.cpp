@@ -72,6 +72,7 @@ void OmapLayer::lockPageFlip(bool& recomputeVisibleRegions)
             break;
         default:
             //Invalid type
+            mType = eMono;
             return;
     }
     switch (s3d_order) {
