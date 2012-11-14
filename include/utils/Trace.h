@@ -51,7 +51,10 @@
 #define ATRACE_TAG_SYNC_MANAGER     (1<<7)
 #define ATRACE_TAG_AUDIO            (1<<8)
 #define ATRACE_TAG_VIDEO            (1<<9)
-#define ATRACE_TAG_LAST             ATRACE_TAG_VIDEO
+#define ATRACE_TAG_CAMERA           (1<<10)
+#define ATRACE_TAG_LAST             ATRACE_TAG_CAMERA
+
+#define ATRACE_TAG_NOT_READY        (1LL<<63)   // Reserved for use during init
 
 #define ATRACE_TAG_VALID_MASK ((ATRACE_TAG_LAST - 1) | ATRACE_TAG_LAST)
 
@@ -65,6 +68,11 @@
 // the correct start and end times this macro should be the first line of the
 // function body.
 #define ATRACE_CALL() android::ScopedTrace ___tracer(ATRACE_TAG, __FUNCTION__)
+
+// ATRACE_NAME traces the beginning and end of the current function.  To trace
+// the correct start and end times this macro should be the first line of the
+// function body.
+#define ATRACE_NAME(name) android::ScopedTrace ___tracer(ATRACE_TAG, name)
 
 // ATRACE_INT traces a named integer value.  This can be used to track how the
 // value changes over time in a trace.

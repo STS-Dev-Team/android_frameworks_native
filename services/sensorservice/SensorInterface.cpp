@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2007 The Android Open Source Project
+ * Copyright (C) 2010 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,51 +14,50 @@
  * limitations under the License.
  */
 
-#ifndef ANDROID_SF_SHARED_BUFFER_STACK_H
-#define ANDROID_SF_SHARED_BUFFER_STACK_H
-
 #include <stdint.h>
 #include <sys/types.h>
 
-#include <utils/Debug.h>
+#include <cutils/log.h>
+
+#include "SensorInterface.h"
 
 namespace android {
 // ---------------------------------------------------------------------------
 
-#define NUM_DISPLAY_MAX 4
-
-struct display_cblk_t
+SensorInterface::~SensorInterface()
 {
-    uint16_t    w;
-    uint16_t    h;
-    uint8_t     format;
-    uint8_t     orientation;
-    uint8_t     reserved[2];
-    float       fps;
-    float       density;
-    float       xdpi;
-    float       ydpi;
-#ifdef OMAP_ENHANCEMENT
-    uint32_t    maxTex;
-    uint32_t    pad[1];
-#else
-    uint32_t    pad[2];
-#endif
-};
-
-struct surface_flinger_cblk_t   // 4KB max
-{
-    uint8_t         connected;
-    uint8_t         reserved[3];
-    uint32_t        pad[7];
-    display_cblk_t  displays[NUM_DISPLAY_MAX];
-};
+}
 
 // ---------------------------------------------------------------------------
 
-COMPILE_TIME_ASSERT(sizeof(surface_flinger_cblk_t) <= 4096)
+HardwareSensor::HardwareSensor(const sensor_t& sensor)
+    : mSensorDevice(SensorDevice::getInstance()),
+      mSensor(&sensor)
+{
+    ALOGI("%s", sensor.name);
+}
+
+HardwareSensor::~HardwareSensor() {
+}
+
+bool HardwareSensor::process(sensors_event_t* outEvent,
+        const sensors_event_t& event) {
+    *outEvent = event;
+    return true;
+}
+
+status_t HardwareSensor::activate(void* ident, bool enabled) {
+    return mSensorDevice.activate(ident, mSensor.getHandle(), enabled);
+}
+
+status_t HardwareSensor::setDelay(void* ident, int handle, int64_t ns) {
+    return mSensorDevice.setDelay(ident, handle, ns);
+}
+
+Sensor HardwareSensor::getSensor() const {
+    return mSensor;
+}
+
 
 // ---------------------------------------------------------------------------
 }; // namespace android
-
-#endif /* ANDROID_SF_SHARED_BUFFER_STACK_H */

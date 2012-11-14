@@ -52,13 +52,16 @@ static char const * const sExtensionString  =
         "EGL_KHR_gl_texture_cubemap_image "
         "EGL_KHR_gl_renderbuffer_image "
         "EGL_KHR_fence_sync "
+        "EGL_EXT_create_context_robustness "
         "EGL_NV_system_time "
         "EGL_ANDROID_image_native_buffer "      // mandatory
         ;
 
 // extensions not exposed to applications but used by the ANDROID system
 //      "EGL_ANDROID_recordable "               // mandatory
+//      "EGL_ANDROID_framebuffer_target "       // mandatory for HWC 1.1
 //      "EGL_ANDROID_blob_cache "               // strongly recommended
+//      "EGL_ANDROID_native_fence_sync "        // strongly recommended
 //      "EGL_IMG_hibernate_process "            // optional
 
 extern void initEglTraceLevel();
@@ -263,7 +266,13 @@ EGLBoolean egl_display_t::terminate() {
     Mutex::Autolock _l(lock);
 
     if (refs == 0) {
-        return setError(EGL_NOT_INITIALIZED, EGL_FALSE);
+        /*
+         * From the EGL spec (3.2):
+         * "Termination of a display that has already been terminated,
+         *  (...), is allowed, but the only effect of such a call is
+         *  to return EGL_TRUE (...)
+         */
+        return EGL_TRUE;
     }
 
     // this is specific to Android, display termination is ref-counted.
@@ -285,6 +294,10 @@ EGLBoolean egl_display_t::terminate() {
     }
 
     mHibernation.setDisplayValid(false);
+
+    // Reset the extension string since it will be regenerated if we get
+    // reinitialized.
+    mExtensionString.setTo("");
 
     // Mark all objects remaining in the list as terminated, unless
     // there are no reference to them, it which case, we're free to

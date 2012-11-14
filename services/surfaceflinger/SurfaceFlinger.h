@@ -20,6 +20,9 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include <EGL/egl.h>
+#include <GLES/gl.h>
+
 #include <cutils/compiler.h>
 
 #include <utils/Atomic.h>
@@ -33,204 +36,103 @@
 #include <binder/IMemory.h>
 
 #include <ui/PixelFormat.h>
-#include <gui/IGraphicBufferAlloc.h>
+
 #include <gui/ISurfaceComposer.h>
 #include <gui/ISurfaceComposerClient.h>
 
-#include "Barrier.h"
-#include "Layer.h"
+#include <hardware/hwcomposer_defs.h>
 
+#include <private/gui/LayerState.h>
+
+#include "Barrier.h"
 #include "MessageQueue.h"
+#include "DisplayDevice.h"
+
+#include "DisplayHardware/HWComposer.h"
 
 namespace android {
 
 // ---------------------------------------------------------------------------
 
 class Client;
-class DisplayHardware;
 class DisplayEventConnection;
 class EventThread;
+class IGraphicBufferAlloc;
 class Layer;
+class LayerBase;
+class LayerBaseClient;
 class LayerDim;
 class LayerScreenshot;
-struct surface_flinger_cblk_t;
-
-// ---------------------------------------------------------------------------
-
-class Client : public BnSurfaceComposerClient
-{
-public:
-        Client(const sp<SurfaceFlinger>& flinger);
-        ~Client();
-
-    status_t initCheck() const;
-
-    // protected by SurfaceFlinger::mStateLock
-    size_t attachLayer(const sp<LayerBaseClient>& layer);
-    void detachLayer(const LayerBaseClient* layer);
-    sp<LayerBaseClient> getLayerUser(int32_t i) const;
-
-private:
-    // ISurfaceComposerClient interface
-    virtual sp<ISurface> createSurface(
-            surface_data_t* params, const String8& name,
-            DisplayID display, uint32_t w, uint32_t h,PixelFormat format,
-            uint32_t flags);
-    virtual status_t destroySurface(SurfaceID surfaceId);
-    virtual status_t onTransact(
-        uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags);
-
-    // constant
-    sp<SurfaceFlinger> mFlinger;
-
-    // protected by mLock
-    DefaultKeyedVector< size_t, wp<LayerBaseClient> > mLayers;
-    size_t mNameGenerator;
-
-    // thread-safe
-    mutable Mutex mLock;
-};
-
-class GraphicBufferAlloc : public BnGraphicBufferAlloc
-{
-public:
-    GraphicBufferAlloc();
-    virtual ~GraphicBufferAlloc();
-    virtual sp<GraphicBuffer> createGraphicBuffer(uint32_t w, uint32_t h,
-        PixelFormat format, uint32_t usage, status_t* error);
-};
-
-// ---------------------------------------------------------------------------
-
-class GraphicPlane
-{
-public:
-    static status_t orientationToTransfrom(int orientation, int w, int h,
-            Transform* tr);
-
-                                GraphicPlane();
-                                ~GraphicPlane();
-
-        bool                    initialized() const;
-
-        void                    setDisplayHardware(DisplayHardware *);
-        status_t                setOrientation(int orientation);
-        int                     getOrientation() const { return mOrientation; }
-        int                     getWidth() const;
-        int                     getHeight() const;
-
-        const DisplayHardware&  displayHardware() const;
-        DisplayHardware&        editDisplayHardware();
-        const Transform&        transform() const;
-        EGLDisplay              getEGLDisplay() const;
-        
-private:
-                                GraphicPlane(const GraphicPlane&);
-        GraphicPlane            operator = (const GraphicPlane&);
-
-        DisplayHardware*        mHw;
-        Transform               mGlobalTransform;
-        Transform               mDisplayTransform;
-        int                     mOrientation;
-        float                   mDisplayWidth;
-        float                   mDisplayHeight;
-        int                     mWidth;
-        int                     mHeight;
-};
+class SurfaceTextureClient;
 
 // ---------------------------------------------------------------------------
 
 enum {
-    eTransactionNeeded      = 0x01,
-    eTraversalNeeded        = 0x02
+    eTransactionNeeded        = 0x01,
+    eTraversalNeeded          = 0x02,
+    eDisplayTransactionNeeded = 0x04,
+    eTransactionMask          = 0x07
 };
 
-class SurfaceFlinger :
-        public BinderService<SurfaceFlinger>,
-        public BnSurfaceComposer,
-        public IBinder::DeathRecipient,
-        protected Thread
+class SurfaceFlinger : public BinderService<SurfaceFlinger>,
+                       public BnSurfaceComposer,
+                       private IBinder::DeathRecipient,
+                       private Thread,
+                       private HWComposer::EventHandler
 {
 public:
-    static char const* getServiceName() { return "SurfaceFlinger"; }
+    static char const* getServiceName() {
+        return "SurfaceFlinger";
+    }
 
-                    SurfaceFlinger();
-    virtual         ~SurfaceFlinger();
-            void    init();
+    SurfaceFlinger();
 
-    virtual status_t onTransact(
-        uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags);
-
-    virtual status_t dump(int fd, const Vector<String16>& args);
-
-    // ISurfaceComposer interface
-    virtual sp<ISurfaceComposerClient>  createConnection();
-    virtual sp<IGraphicBufferAlloc>     createGraphicBufferAlloc();
-    virtual sp<IMemoryHeap>             getCblk() const;
-    virtual void                        bootFinished();
-    virtual void                        setTransactionState(const Vector<ComposerState>& state,
-                                                            int orientation, uint32_t flags);
-    virtual bool                        authenticateSurfaceTexture(const sp<ISurfaceTexture>& surface) const;
-    virtual sp<IDisplayEventConnection> createDisplayEventConnection();
-
-    virtual status_t captureScreen(DisplayID dpy,
-            sp<IMemoryHeap>* heap,
-            uint32_t* width, uint32_t* height,
-            PixelFormat* format, uint32_t reqWidth, uint32_t reqHeight,
-            uint32_t minLayerZ, uint32_t maxLayerZ);
-
-    virtual status_t                    turnElectronBeamOff(int32_t mode);
-    virtual status_t                    turnElectronBeamOn(int32_t mode);
-
-
-            // called when screen needs to turn off
-            void screenReleased();
-            // called when screen is turning back on
-            void screenAcquired();
-
-            // called on the main thread in response to screenReleased()
-            void onScreenReleased();
-            // called on the main thread in response to screenAcquired()
-            void onScreenAcquired();
-
-
-            status_t renderScreenToTexture(DisplayID dpy,
-                    GLuint* textureName, GLfloat* uOut, GLfloat* vOut);
-            status_t renderScreenToTextureLocked(DisplayID dpy,
-                    GLuint* textureName, GLfloat* uOut, GLfloat* vOut);
-
-            void onMessageReceived(int32_t what);
-
-            status_t postMessageAsync(const sp<MessageBase>& msg,
-                    nsecs_t reltime=0, uint32_t flags = 0);
-
-            status_t postMessageSync(const sp<MessageBase>& msg,
-                    nsecs_t reltime=0, uint32_t flags = 0);
-
-    status_t removeLayer(const sp<LayerBase>& layer);
-    status_t addLayer(const sp<LayerBase>& layer);
-    status_t invalidateLayerVisibility(const sp<LayerBase>& layer);
-    void invalidateHwcGeometry();
-
-    sp<Layer> getLayer(const sp<ISurface>& sur) const;
-
-    GLuint getProtectedTexName() const { return mProtectedTexName; }
-
-
-    class MessageDestroyGLTexture : public MessageBase {
-        GLuint texture;
-    public:
-        MessageDestroyGLTexture(GLuint texture) : texture(texture) { }
-        virtual bool handler() {
-            glDeleteTextures(1, &texture);
-            return true;
-        }
+    enum {
+        EVENT_VSYNC = HWC_EVENT_VSYNC
     };
 
+    // post an asynchronous message to the main thread
+    status_t postMessageAsync(const sp<MessageBase>& msg, nsecs_t reltime = 0,
+        uint32_t flags = 0);
 
-private:
-    // DeathRecipient interface
-    virtual void binderDied(const wp<IBinder>& who);
+    // post a synchronous message to the main thread
+    status_t postMessageSync(const sp<MessageBase>& msg, nsecs_t reltime = 0,
+        uint32_t flags = 0);
+
+    // force full composition on all displays
+    void repaintEverything();
+
+    // renders content on given display to a texture. thread-safe version.
+    status_t renderScreenToTexture(uint32_t layerStack, GLuint* textureName,
+        GLfloat* uOut, GLfloat* vOut);
+
+    // renders content on given display to a texture, w/o acquiring main lock
+    status_t renderScreenToTextureLocked(uint32_t layerStack, GLuint* textureName,
+        GLfloat* uOut, GLfloat* vOut);
+
+    // returns the default Display
+    sp<const DisplayDevice> getDefaultDisplayDevice() const {
+        return getDisplayDevice(mDefaultDisplays[DisplayDevice::DISPLAY_PRIMARY]);
+    }
+
+    // utility function to delete a texture on the main thread
+    void deleteTextureAsync(GLuint texture);
+
+    // allocate a h/w composer display id
+    int32_t allocateHwcDisplayId(DisplayDevice::DisplayType type);
+
+    // enable/disable h/w composer event
+    // TODO: this should be made accessible only to EventThread
+    void eventControl(int disp, int event, int enabled);
+
+    // called on the main thread by MessageQueue when an internal message
+    // is received
+    // TODO: this should be made accessible only to MessageQueue
+    void onMessageReceived(int32_t what);
+
+    // for debugging only
+    // TODO: this should be made accessible only to HWComposer
+    const Vector< sp<LayerBase> >& getLayerSortedByZForHwcDisplay(int disp);
 
 private:
     friend class Client;
@@ -238,221 +140,324 @@ private:
     friend class LayerBase;
     friend class LayerBaseClient;
     friend class Layer;
-#ifdef OMAP_ENHANCEMENT_S3D
-    friend class S3DSurfaceFlinger;
-    friend class OmapLayer;
-#endif
+    friend class LayerScreenshot;
 
-    sp<ISurface> createSurface(
-            ISurfaceComposerClient::surface_data_t* params,
-            const String8& name,
-            const sp<Client>& client,
-            DisplayID display, uint32_t w, uint32_t h, PixelFormat format,
-            uint32_t flags);
+    // We're reference counted, never destroy SurfaceFlinger directly
+    virtual ~SurfaceFlinger();
 
-#ifdef OMAP_ENHANCEMENT_S3D
-    virtual sp<Layer> createNormalSurface(
-#else
-    sp<Layer> createNormalSurface(
-#endif
-            const sp<Client>& client, DisplayID display,
-            uint32_t w, uint32_t h, uint32_t flags,
-            PixelFormat& format);
+    /* ------------------------------------------------------------------------
+     * Internal data structures
+     */
 
-    sp<LayerDim> createDimSurface(
-            const sp<Client>& client, DisplayID display,
-            uint32_t w, uint32_t h, uint32_t flags);
-
-#ifdef OMAP_ENHANCEMENT_S3D
-    virtual sp<LayerScreenshot> createScreenshotSurface(
-#else
-    sp<LayerScreenshot> createScreenshotSurface(
-#endif
-            const sp<Client>& client, DisplayID display,
-            uint32_t w, uint32_t h, uint32_t flags);
-
-    status_t removeSurface(const sp<Client>& client, SurfaceID sid);
-    status_t destroySurface(const wp<LayerBaseClient>& layer);
-    uint32_t setClientStateLocked(const sp<Client>& client, const layer_state_t& s);
-
-    class LayerVector : public SortedVector< sp<LayerBase> > {
+    class LayerVector : public SortedVector<sp<LayerBase> > {
     public:
-        LayerVector() { }
-        LayerVector(const LayerVector& rhs) : SortedVector< sp<LayerBase> >(rhs) { }
-        virtual int do_compare(const void* lhs, const void* rhs) const {
-            const sp<LayerBase>& l(*reinterpret_cast<const sp<LayerBase>*>(lhs));
-            const sp<LayerBase>& r(*reinterpret_cast<const sp<LayerBase>*>(rhs));
-            // sort layers by Z order
-            uint32_t lz = l->currentState().z;
-            uint32_t rz = r->currentState().z;
-            // then by sequence, so we get a stable ordering
-            return (lz != rz) ? (lz - rz) : (l->sequence - r->sequence);
-        }
+        LayerVector();
+        LayerVector(const LayerVector& rhs);
+        virtual int do_compare(const void* lhs, const void* rhs) const;
+    };
+
+    struct DisplayDeviceState {
+        DisplayDeviceState();
+        DisplayDeviceState(DisplayDevice::DisplayType type);
+        bool isValid() const { return type >= 0; }
+        bool isMainDisplay() const { return type == DisplayDevice::DISPLAY_PRIMARY; }
+        bool isVirtualDisplay() const { return type >= DisplayDevice::DISPLAY_VIRTUAL; }
+        DisplayDevice::DisplayType type;
+        sp<ISurfaceTexture> surface;
+        uint32_t layerStack;
+        Rect viewport;
+        Rect frame;
+        uint8_t orientation;
+        String8 displayName;
+        bool isSecure;
     };
 
     struct State {
-        State()
-            : orientation(ISurfaceComposer::eOrientationDefault),
-              orientationFlags(0) {
-        }
-        LayerVector     layersSortedByZ;
-        uint8_t         orientation;
-        uint8_t         orientationFlags;
+        LayerVector layersSortedByZ;
+        DefaultKeyedVector< wp<IBinder>, DisplayDeviceState> displays;
     };
 
-    virtual bool        threadLoop();
-    virtual status_t    readyToRun();
-    virtual void        onFirstRef();
+    /* ------------------------------------------------------------------------
+     * IBinder interface
+     */
+    virtual status_t onTransact(uint32_t code, const Parcel& data,
+        Parcel* reply, uint32_t flags);
+    virtual status_t dump(int fd, const Vector<String16>& args);
 
-public:     // hack to work around gcc 4.0.3 bug
-    const GraphicPlane&     graphicPlane(int dpy) const;
-          GraphicPlane&     graphicPlane(int dpy);
+    /* ------------------------------------------------------------------------
+     * ISurfaceComposer interface
+     */
+    virtual sp<ISurfaceComposerClient> createConnection();
+    virtual sp<IGraphicBufferAlloc> createGraphicBufferAlloc();
+    virtual sp<IBinder> createDisplay(const String8& displayName, bool secure);
+    virtual sp<IBinder> getBuiltInDisplay(int32_t id);
+    virtual void setTransactionState(const Vector<ComposerState>& state,
+            const Vector<DisplayState>& displays, uint32_t flags);
+    virtual void bootFinished();
+    virtual bool authenticateSurfaceTexture(
+        const sp<ISurfaceTexture>& surface) const;
+    virtual sp<IDisplayEventConnection> createDisplayEventConnection();
+    virtual status_t captureScreen(const sp<IBinder>& display, sp<IMemoryHeap>* heap,
+        uint32_t* width, uint32_t* height, PixelFormat* format,
+        uint32_t reqWidth, uint32_t reqHeight, uint32_t minLayerZ,
+        uint32_t maxLayerZ);
+    // called when screen needs to turn off
+    virtual void blank(const sp<IBinder>& display);
+    // called when screen is turning back on
+    virtual void unblank(const sp<IBinder>& display);
+    virtual status_t getDisplayInfo(const sp<IBinder>& display, DisplayInfo* info);
 
-          void              signalTransaction();
-          void              signalLayerUpdate();
-          void              signalRefresh();
-          void              repaintEverything();
+    /* ------------------------------------------------------------------------
+     * DeathRecipient interface
+     */
+    virtual void binderDied(const wp<IBinder>& who);
 
-private:
-            void        waitForEvent();
-            void        handleTransaction(uint32_t transactionFlags);
-            void        handleTransactionLocked(uint32_t transactionFlags);
+    /* ------------------------------------------------------------------------
+     * Thread interface
+     */
+    virtual bool threadLoop();
+    virtual status_t readyToRun();
+    virtual void onFirstRef();
 
-            void        computeVisibleRegions(
-                            const LayerVector& currentLayers,
-                            Region& dirtyRegion,
-                            Region& wormholeRegion);
-#ifdef OMAP_ENHANCEMENT_S3D
-            virtual void        handlePageFlip();
-#else
-            void        handlePageFlip();
-#endif
-            bool        lockPageFlip(const LayerVector& currentLayers);
-            void        unlockPageFlip(const LayerVector& currentLayers);
-            void        handleRefresh();
-#ifdef OMAP_ENHANCEMENT_S3D
-            virtual void        handleWorkList();
-#else
-            void        handleWorkList();
-#endif
-            void        handleRepaint();
-            void        postFramebuffer();
-            void        setupHardwareComposer();
-#ifdef OMAP_ENHANCEMENT_S3D
-            virtual void        composeSurfaces(const Region& dirty);
-#else
-            void        composeSurfaces(const Region& dirty);
+    /* ------------------------------------------------------------------------
+     * HWComposer::EventHandler interface
+     */
+    virtual void onVSyncReceived(int type, nsecs_t timestamp);
+    virtual void onHotplugReceived(int disp, bool connected);
 
-#endif
+    /* ------------------------------------------------------------------------
+     * Message handling
+     */
+    void waitForEvent();
+    void signalTransaction();
+    void signalLayerUpdate();
+    void signalRefresh();
 
-            void        setInvalidateRegion(const Region& reg);
-            Region      getAndClearInvalidateRegion();
+    // called on the main thread in response to initializeDisplays()
+    void onInitializeDisplays();
+    // called on the main thread in response to blank()
+    void onScreenReleased(const sp<const DisplayDevice>& hw);
+    // called on the main thread in response to unblank()
+    void onScreenAcquired(const sp<const DisplayDevice>& hw);
 
-            ssize_t     addClientLayer(const sp<Client>& client,
-                    const sp<LayerBaseClient>& lbc);
-            status_t    addLayer_l(const sp<LayerBase>& layer);
-            status_t    removeLayer_l(const sp<LayerBase>& layer);
-            status_t    purgatorizeLayer_l(const sp<LayerBase>& layer);
+    void handleMessageTransaction();
+    void handleMessageInvalidate();
+    void handleMessageRefresh();
 
-            uint32_t    getTransactionFlags(uint32_t flags);
-            uint32_t    peekTransactionFlags(uint32_t flags);
-            uint32_t    setTransactionFlags(uint32_t flags);
-            void        commitTransaction();
+    void handleTransaction(uint32_t transactionFlags);
+    void handleTransactionLocked(uint32_t transactionFlags);
 
-#ifdef OMAP_ENHANCEMENT_S3D
-    virtual void     drawLayersForScreenshotLocked();
-    virtual status_t captureScreenImplLocked(DisplayID dpy,
-#else
-            status_t captureScreenImplLocked(DisplayID dpy,
-#endif
-                    sp<IMemoryHeap>* heap,
-                    uint32_t* width, uint32_t* height, PixelFormat* format,
-                    uint32_t reqWidth, uint32_t reqHeight,
-                    uint32_t minLayerZ, uint32_t maxLayerZ);
+    /* handlePageFilp: this is were we latch a new buffer
+     * if available and compute the dirty region.
+     */
+    void handlePageFlip();
 
-            status_t turnElectronBeamOffImplLocked(int32_t mode);
-            status_t turnElectronBeamOnImplLocked(int32_t mode);
-            status_t electronBeamOffAnimationImplLocked();
-            status_t electronBeamOnAnimationImplLocked();
+    /* ------------------------------------------------------------------------
+     * Transactions
+     */
+    uint32_t getTransactionFlags(uint32_t flags);
+    uint32_t peekTransactionFlags(uint32_t flags);
+    uint32_t setTransactionFlags(uint32_t flags);
+    void commitTransaction();
+    uint32_t setClientStateLocked(const sp<Client>& client,
+        const layer_state_t& s);
+    uint32_t setDisplayStateLocked(const DisplayState& s);
 
-            void        debugFlashRegions();
-            void        drawWormhole() const;
+    /* ------------------------------------------------------------------------
+     * Layer management
+     */
+    sp<ISurface> createLayer(ISurfaceComposerClient::surface_data_t* params,
+            const String8& name, const sp<Client>& client,
+            uint32_t w, uint32_t h, PixelFormat format, uint32_t flags);
 
-#ifdef OMAP_ENHANCEMENT_S3D
-    virtual void modifyCoords(GLint& x, GLint& y, GLsizei& rw, GLsizei& rh) const {};
-#endif
-            void        startBootAnim();
+    sp<Layer> createNormalLayer(const sp<Client>& client,
+            uint32_t w, uint32_t h, uint32_t flags, PixelFormat& format);
 
-            void listLayersLocked(const Vector<String16>& args, size_t& index,
-                    String8& result, char* buffer, size_t SIZE) const;
-            void dumpStatsLocked(const Vector<String16>& args, size_t& index,
-                    String8& result, char* buffer, size_t SIZE) const;
-            void clearStatsLocked(const Vector<String16>& args, size_t& index,
-                    String8& result, char* buffer, size_t SIZE) const;
-            void dumpAllLocked(String8& result, char* buffer, size_t SIZE) const;
+    sp<LayerDim> createDimLayer(const sp<Client>& client,
+            uint32_t w, uint32_t h, uint32_t flags);
 
-    mutable     MessageQueue    mEventQueue;
+    sp<LayerScreenshot> createScreenshotLayer(const sp<Client>& client,
+            uint32_t w, uint32_t h, uint32_t flags);
 
-                // access must be protected by mStateLock
-    mutable     Mutex                   mStateLock;
-                State                   mCurrentState;
-    volatile    int32_t                 mTransactionFlags;
-                Condition               mTransactionCV;
-                SortedVector< sp<LayerBase> > mLayerPurgatory;
-                bool                    mTransationPending;
-                Vector< sp<LayerBase> > mLayersPendingRemoval;
+    // called in response to the window-manager calling
+    // ISurfaceComposerClient::destroySurface()
+    // The specified layer is first placed in a purgatory list
+    // until all references from the client are released.
+    status_t onLayerRemoved(const sp<Client>& client, SurfaceID sid);
 
-                // protected by mStateLock (but we could use another lock)
-                GraphicPlane                mGraphicPlanes[1];
-                bool                        mLayersRemoved;
-                DefaultKeyedVector< wp<IBinder>, wp<Layer> > mLayerMap;
+    // called when all clients have released all their references to
+    // this layer meaning it is entirely safe to destroy all
+    // resources associated to this layer.
+    status_t onLayerDestroyed(const wp<LayerBaseClient>& layer);
 
-                // access must be protected by mInvalidateLock
-    mutable     Mutex                       mInvalidateLock;
-                Region                      mInvalidateRegion;
+    // remove a layer from SurfaceFlinger immediately
+    status_t removeLayer(const sp<LayerBase>& layer);
 
-                // constant members (no synchronization needed for access)
-                sp<IMemoryHeap>             mServerHeap;
-                surface_flinger_cblk_t*     mServerCblk;
-                GLuint                      mWormholeTexName;
-                GLuint                      mProtectedTexName;
-                nsecs_t                     mBootTime;
-                sp<EventThread>             mEventThread;
+    // add a layer to SurfaceFlinger
+    ssize_t addClientLayer(const sp<Client>& client,
+        const sp<LayerBaseClient>& lbc);
 
-                // Can only accessed from the main thread, these members
-                // don't need synchronization
-                State                       mDrawingState;
-                Region                      mDirtyRegion;
-                Region                      mDirtyRegionRemovedLayer;
-                Region                      mSwapRegion;
-                Region                      mWormholeRegion;
-                bool                        mVisibleRegionsDirty;
-                bool                        mHwWorkListDirty;
-                int32_t                     mElectronBeamAnimationMode;
-                Vector< sp<LayerBase> >     mVisibleLayersSortedByZ;
+    status_t removeLayer_l(const sp<LayerBase>& layer);
+    status_t purgatorizeLayer_l(const sp<LayerBase>& layer);
+
+    /* ------------------------------------------------------------------------
+     * Boot animation, on/off animations and screen capture
+     */
+
+    void startBootAnim();
+
+    status_t captureScreenImplLocked(const sp<IBinder>& display, sp<IMemoryHeap>* heap,
+        uint32_t* width, uint32_t* height, PixelFormat* format,
+        uint32_t reqWidth, uint32_t reqHeight, uint32_t minLayerZ,
+        uint32_t maxLayerZ);
+
+    /* ------------------------------------------------------------------------
+     * EGL
+     */
+    static status_t selectConfigForAttribute(EGLDisplay dpy,
+        EGLint const* attrs, EGLint attribute, EGLint value, EGLConfig* outConfig);
+    static EGLConfig selectEGLConfig(EGLDisplay disp, EGLint visualId);
+    static EGLContext createGLContext(EGLDisplay disp, EGLConfig config);
+    void initializeGL(EGLDisplay display);
+    uint32_t getMaxTextureSize() const;
+    uint32_t getMaxViewportDims() const;
+
+    /* ------------------------------------------------------------------------
+     * Display and layer stack management
+     */
+    // called when starting, or restarting after system_server death
+    void initializeDisplays();
+
+    // NOTE: can only be called from the main thread or with mStateLock held
+    sp<const DisplayDevice> getDisplayDevice(const wp<IBinder>& dpy) const {
+        return mDisplays.valueFor(dpy);
+    }
+
+    // NOTE: can only be called from the main thread or with mStateLock held
+    sp<DisplayDevice> getDisplayDevice(const wp<IBinder>& dpy) {
+        return mDisplays.valueFor(dpy);
+    }
+
+    // mark a region of a layer stack dirty. this updates the dirty
+    // region of all screens presenting this layer stack.
+    void invalidateLayerStack(uint32_t layerStack, const Region& dirty);
+
+    /* ------------------------------------------------------------------------
+     * H/W composer
+     */
+
+    HWComposer& getHwComposer() const { return *mHwc; }
+
+    /* ------------------------------------------------------------------------
+     * Compositing
+     */
+    void invalidateHwcGeometry();
+    static void computeVisibleRegions(
+            const LayerVector& currentLayers, uint32_t layerStack,
+            Region& dirtyRegion, Region& opaqueRegion);
+
+    void preComposition();
+    void postComposition();
+    void rebuildLayerStacks();
+    void setUpHWComposer();
+    void doComposition();
+    void doDebugFlashRegions();
+    void doDisplayComposition(const sp<const DisplayDevice>& hw,
+            const Region& dirtyRegion);
+    void doComposeSurfaces(const sp<const DisplayDevice>& hw,
+            const Region& dirty);
+
+    void postFramebuffer();
+    void drawWormhole(const sp<const DisplayDevice>& hw,
+            const Region& region) const;
+    GLuint getProtectedTexName() const {
+        return mProtectedTexName;
+    }
+
+    /* ------------------------------------------------------------------------
+     * Display management
+     */
 
 
-                // don't use a lock for these, we don't care
-                int                         mDebugRegion;
-                int                         mDebugDDMS;
-                int                         mDebugDisableHWC;
-                int                         mDebugDisableTransformHint;
-                volatile nsecs_t            mDebugInSwapBuffers;
-                nsecs_t                     mLastSwapBufferTime;
-                volatile nsecs_t            mDebugInTransaction;
-                nsecs_t                     mLastTransactionTime;
-                bool                        mBootFinished;
+    /* ------------------------------------------------------------------------
+     * Debugging & dumpsys
+     */
+    void listLayersLocked(const Vector<String16>& args, size_t& index,
+        String8& result, char* buffer, size_t SIZE) const;
+    void dumpStatsLocked(const Vector<String16>& args, size_t& index,
+        String8& result, char* buffer, size_t SIZE) const;
+    void clearStatsLocked(const Vector<String16>& args, size_t& index,
+        String8& result, char* buffer, size_t SIZE) const;
+    void dumpAllLocked(String8& result, char* buffer, size_t SIZE) const;
+    bool startDdmConnection();
+    static void appendSfConfigString(String8& result);
 
-                // these are thread safe
-    mutable     Barrier                     mReadyToRunBarrier;
+    /* ------------------------------------------------------------------------
+     * Attributes
+     */
 
+    // access must be protected by mStateLock
+    mutable Mutex mStateLock;
+    State mCurrentState;
+    volatile int32_t mTransactionFlags;
+    Condition mTransactionCV;
+    SortedVector<sp<LayerBase> > mLayerPurgatory;
+    bool mTransactionPending;
+    bool mAnimTransactionPending;
+    Vector<sp<LayerBase> > mLayersPendingRemoval;
 
-                // protected by mDestroyedLayerLock;
-    mutable     Mutex                       mDestroyedLayerLock;
-                Vector<LayerBase const *>   mDestroyedLayers;
+    // protected by mStateLock (but we could use another lock)
+    bool mLayersRemoved;
 
-   // only written in the main thread, only read in other threads
-   volatile     int32_t                     mSecureFrameBuffer;
+    // access must be protected by mInvalidateLock
+    volatile int32_t mRepaintEverything;
+
+    // constant members (no synchronization needed for access)
+    HWComposer* mHwc;
+    GLuint mProtectedTexName;
+    nsecs_t mBootTime;
+    sp<EventThread> mEventThread;
+    GLint mMaxViewportDims[2];
+    GLint mMaxTextureSize;
+    EGLContext mEGLContext;
+    EGLConfig mEGLConfig;
+    EGLDisplay mEGLDisplay;
+    sp<IBinder> mDefaultDisplays[DisplayDevice::NUM_DISPLAY_TYPES];
+
+    // Can only accessed from the main thread, these members
+    // don't need synchronization
+    State mDrawingState;
+    bool mVisibleRegionsDirty;
+    bool mHwWorkListDirty;
+
+    // this may only be written from the main thread with mStateLock held
+    // it may be read from other threads with mStateLock held
+    DefaultKeyedVector< wp<IBinder>, sp<DisplayDevice> > mDisplays;
+
+    // don't use a lock for these, we don't care
+    int mDebugRegion;
+    int mDebugDDMS;
+    int mDebugDisableHWC;
+    int mDebugDisableTransformHint;
+    volatile nsecs_t mDebugInSwapBuffers;
+    nsecs_t mLastSwapBufferTime;
+    volatile nsecs_t mDebugInTransaction;
+    nsecs_t mLastTransactionTime;
+    bool mBootFinished;
+
+    // these are thread safe
+    mutable MessageQueue mEventQueue;
+    mutable Barrier mReadyToRunBarrier;
+
+    // protected by mDestroyedLayerLock;
+    mutable Mutex mDestroyedLayerLock;
+    Vector<LayerBase const *> mDestroyedLayers;
+
+    /* ------------------------------------------------------------------------
+     * Feature prototyping
+     */
+
+    sp<IBinder> mExtDisplayToken;
 };
 
 // ---------------------------------------------------------------------------

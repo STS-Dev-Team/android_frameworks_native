@@ -24,6 +24,7 @@
 
 #include <gui/ISurfaceTexture.h>
 #include <gui/BufferQueue.h>
+#include <gui/ConsumerBase.h>
 
 #include <ui/GraphicBuffer.h>
 
@@ -39,20 +40,9 @@ namespace android {
 
 class String8;
 
-class SurfaceTexture : public virtual RefBase,
-        protected BufferQueue::ConsumerListener {
+class SurfaceTexture : public ConsumerBase {
 public:
-    struct FrameAvailableListener : public virtual RefBase {
-        // onFrameAvailable() is called each time an additional frame becomes
-        // available for consumption. This means that frames that are queued
-        // while in asynchronous mode only trigger the callback if no previous
-        // frames are pending. Frames queued while in synchronous mode always
-        // trigger the callback.
-        //
-        // This is called without any lock held and can be called concurrently
-        // by multiple threads.
-        virtual void onFrameAvailable() = 0;
-    };
+    typedef ConsumerBase::FrameAvailableListener FrameAvailableListener;
 
     // SurfaceTexture constructs a new SurfaceTexture object. tex indicates the
     // name of the OpenGL ES texture to which images are to be streamed.
@@ -82,19 +72,28 @@ public:
             GLenum texTarget = GL_TEXTURE_EXTERNAL_OES, bool useFenceSync = true,
             const sp<BufferQueue> &bufferQueue = 0);
 
-    virtual ~SurfaceTexture();
-
     // updateTexImage sets the image contents of the target texture to that of
     // the most recently queued buffer.
     //
     // This call may only be made while the OpenGL ES context to which the
     // target texture belongs is bound to the calling thread.
+    //
+    // After calling this method the doGLFenceWait method must be called
+    // before issuing OpenGL ES commands that access the texture contents.
     status_t updateTexImage();
 
-    // setBufferCountServer set the buffer count. If the client has requested
-    // a buffer count using setBufferCount, the server-buffer count will
-    // take effect once the client sets the count back to zero.
-    status_t setBufferCountServer(int bufferCount);
+    // setReleaseFence stores a fence file descriptor that will signal when the
+    // current buffer is no longer being read. This fence will be returned to
+    // the producer when the current buffer is released by updateTexImage().
+    // Multiple fences can be set for a given buffer; they will be merged into
+    // a single union fence. The SurfaceTexture will close the file descriptor
+    // when finished with it.
+    void setReleaseFence(int fenceFd);
+
+    // setDefaultMaxBufferCount sets the default limit on the maximum number
+    // of buffers that will be allocated at one time. The image producer may
+    // override the limit.
+    status_t setDefaultMaxBufferCount(int bufferCount);
 
     // getTransformMatrix retrieves the 4x4 texture coordinate transform matrix
     // associated with the texture image set by the most recent call to
@@ -123,16 +122,6 @@ public:
     // other semantics (zero point, etc) are source-dependent and should be
     // documented by the source.
     int64_t getTimestamp();
-
-    // setFrameAvailableListener sets the listener object that will be notified
-    // when a new frame becomes available.
-    void setFrameAvailableListener(const sp<FrameAvailableListener>& listener);
-
-    // getAllocator retrieves the binder object that must be referenced as long
-    // as the GraphicBuffers dequeued from this SurfaceTexture are referenced.
-    // Holding this binder reference prevents SurfaceFlinger from freeing the
-    // buffers before the client is done with them.
-    sp<IBinder> getAllocator();
 
     // setDefaultBufferSize is used to set the size of buffers returned by
     // requestBuffers when a with and height of zero is requested.
@@ -164,20 +153,19 @@ public:
     // getCurrentScalingMode returns the scaling mode of the current buffer.
     uint32_t getCurrentScalingMode() const;
 
+    // getCurrentFence returns the fence indicating when the current buffer is
+    // ready to be read from.
+    sp<Fence> getCurrentFence() const;
+
+    // doGLFenceWait inserts a wait command into the OpenGL ES command stream
+    // to ensure that it is safe for future OpenGL ES commands to access the
+    // current texture buffer.  This must be called each time updateTexImage
+    // is called before issuing OpenGL ES commands that access the texture.
+    status_t doGLFenceWait() const;
+
     // isSynchronousMode returns whether the SurfaceTexture is currently in
     // synchronous mode.
     bool isSynchronousMode() const;
-
-    // abandon frees all the buffers and puts the SurfaceTexture into the
-    // 'abandoned' state.  Once put in this state the SurfaceTexture can never
-    // leave it.  When in the 'abandoned' state, all methods of the
-    // ISurfaceTexture interface will fail with the NO_INIT error.
-    //
-    // Note that while calling this method causes all the buffers to be freed
-    // from the perspective of the the SurfaceTexture, if there are additional
-    // references on the buffers (e.g. if a buffer is referenced by a client or
-    // by OpenGL ES as a texture) then those buffer will remain allocated.
-    void abandon();
 
     // set the name of the SurfaceTexture that will be used to identify it in
     // log messages.
@@ -192,7 +180,9 @@ public:
 
     // getBufferQueue returns the BufferQueue object to which this
     // SurfaceTexture is connected.
-    sp<BufferQueue> getBufferQueue() const;
+    sp<BufferQueue> getBufferQueue() const {
+        return mBufferQueue;
+    }
 
     // detachFromContext detaches the SurfaceTexture from the calling thread's
     // current OpenGL ES context.  This context must be the same as the context
@@ -221,10 +211,6 @@ public:
     // current at the time of the last call to detachFromContext.
     status_t attachToContext(GLuint tex);
 
-    // dump our state in a String
-    virtual void dump(String8& result) const;
-    virtual void dump(String8& result, const char* prefix, char* buffer, size_t SIZE) const;
-
 #ifdef OMAP_ENHANCEMENT
     //sets the layout for the buffers
     virtual status_t setLayout(uint32_t layout);
@@ -234,11 +220,23 @@ public:
 
 protected:
 
-    // Implementation of the BufferQueue::ConsumerListener interface.  These
-    // calls are used to notify the SurfaceTexture of asynchronous events in the
-    // BufferQueue.
-    virtual void onFrameAvailable();
-    virtual void onBuffersReleased();
+    // abandonLocked overrides the ConsumerBase method to clear
+    // mCurrentTextureBuf in addition to the ConsumerBase behavior.
+    virtual void abandonLocked();
+
+    // dumpLocked overrides the ConsumerBase method to dump SurfaceTexture-
+    // specific info in addition to the ConsumerBase behavior.
+    virtual void dumpLocked(String8& result, const char* prefix, char* buffer,
+           size_t size) const;
+
+    // acquireBufferLocked overrides the ConsumerBase method to update the
+    // mEglSlots array in addition to the ConsumerBase behavior.
+    virtual status_t acquireBufferLocked(BufferQueue::BufferItem *item);
+
+    // releaseBufferLocked overrides the ConsumerBase method to update the
+    // mEglSlots array in addition to the ConsumerBase.
+    virtual status_t releaseBufferLocked(int buf, EGLDisplay display,
+           EGLSyncKHR eglFence);
 
     static bool isExternalFormat(uint32_t format);
 
@@ -255,7 +253,7 @@ private:
         virtual ~BufferRejecter() { }
     };
     friend class Layer;
-    status_t updateTexImage(BufferRejecter* rejecter);
+    status_t updateTexImage(BufferRejecter* rejecter, bool skipSync);
 
     // createImage creates a new EGLImage from a GraphicBuffer.
     EGLImageKHR createImage(EGLDisplay dpy,
@@ -266,12 +264,20 @@ private:
     // slot and destroy the EGLImage in that slot.  Otherwise it has no effect.
     //
     // This method must be called with mMutex locked.
-    void freeBufferLocked(int slotIndex);
+    virtual void freeBufferLocked(int slotIndex);
 
-    // computeCurrentTransformMatrix computes the transform matrix for the
+    // computeCurrentTransformMatrixLocked computes the transform matrix for the
     // current texture.  It uses mCurrentTransform and the current GraphicBuffer
     // to compute this matrix and stores it in mCurrentTransformMatrix.
-    void computeCurrentTransformMatrix();
+    // mCurrentTextureBuf must not be NULL.
+    void computeCurrentTransformMatrixLocked();
+
+    // doGLFenceWaitLocked inserts a wait command into the OpenGL ES command
+    // stream to ensure that it is safe for future OpenGL ES commands to
+    // access the current texture buffer.  This must be called each time
+    // updateTexImage is called before issuing OpenGL ES commands that access
+    // the texture.
+    status_t doGLFenceWaitLocked() const;
 
     // syncForReleaseLocked performs the synchronization needed to release the
     // current slot from an OpenGL ES context.  If needed it will set the
@@ -301,6 +307,9 @@ private:
     // mCurrentScalingMode is the scaling mode for the current texture. It gets
     // set to each time updateTexImage is called.
     uint32_t mCurrentScalingMode;
+
+    // mCurrentFence is the fence received from BufferQueue in updateTexImage.
+    sp<Fence> mCurrentFence;
 
     // mCurrentTransformMatrix is the transform matrix for the current texture.
     // It gets computed by computeTransformMatrix each time updateTexImage is
@@ -348,10 +357,8 @@ private:
     struct EGLSlot {
         EGLSlot()
         : mEglImage(EGL_NO_IMAGE_KHR),
-          mFence(EGL_NO_SYNC_KHR) {
+          mEglFence(EGL_NO_SYNC_KHR) {
         }
-
-        sp<GraphicBuffer> mGraphicBuffer;
 
         // mEglImage is the EGLImage created from mGraphicBuffer.
         EGLImageKHR mEglImage;
@@ -360,14 +367,13 @@ private:
         // associated with this buffer slot may be dequeued. It is initialized
         // to EGL_NO_SYNC_KHR when the buffer is created and (optionally, based
         // on a compile-time option) set to a new sync object in updateTexImage.
-        EGLSyncKHR mFence;
+        EGLSyncKHR mEglFence;
 
 #ifdef OMAP_ENHANCEMENT
         // mLayout is the current layout of the buffer for this buffer slot. This gets
         // set to mNextLayout each time queueBuffer gets called for this buffer.
         uint32_t mLayout;
 #endif
-
     };
 
     // mEglDisplay is the EGLDisplay with which this SurfaceTexture is currently
@@ -389,23 +395,7 @@ private:
     // slot that has not yet been used. The buffer allocated to a slot will also
     // be replaced if the requested buffer usage or geometry differs from that
     // of the buffer allocated to a slot.
-    EGLSlot mEGLSlots[BufferQueue::NUM_BUFFER_SLOTS];
-
-    // mAbandoned indicates that the BufferQueue will no longer be used to
-    // consume images buffers pushed to it using the ISurfaceTexture interface.
-    // It is initialized to false, and set to true in the abandon method.  A
-    // BufferQueue that has been abandoned will return the NO_INIT error from
-    // all ISurfaceTexture methods capable of returning an error.
-    bool mAbandoned;
-
-    // mName is a string used to identify the SurfaceTexture in log messages.
-    // It can be set by the setName method.
-    String8 mName;
-
-    // mFrameAvailableListener is the listener object that will be called when a
-    // new frame becomes available. If it is not NULL it will be called from
-    // queueBuffer.
-    sp<FrameAvailableListener> mFrameAvailableListener;
+    EGLSlot mEglSlots[BufferQueue::NUM_BUFFER_SLOTS];
 
     // mCurrentTexture is the buffer slot index of the buffer that is currently
     // bound to the OpenGL texture. It is initialized to INVALID_BUFFER_SLOT,
@@ -415,22 +405,13 @@ private:
     // reset mCurrentTexture to INVALID_BUFFER_SLOT.
     int mCurrentTexture;
 
-    // The SurfaceTexture has-a BufferQueue and is responsible for creating this object
-    // if none is supplied
-    sp<BufferQueue> mBufferQueue;
-
-    // mAttached indicates whether the SurfaceTexture is currently attached to
+    // mAttached indicates whether the ConsumerBase is currently attached to
     // an OpenGL ES context.  For legacy reasons, this is initialized to true,
-    // indicating that the SurfaceTexture is considered to be attached to
+    // indicating that the ConsumerBase is considered to be attached to
     // whatever context is current at the time of the first updateTexImage call.
     // It is set to false by detachFromContext, and then set to true again by
     // attachToContext.
     bool mAttached;
-
-    // mMutex is the mutex used to prevent concurrent access to the member
-    // variables of SurfaceTexture objects. It must be locked whenever the
-    // member variables are accessed.
-    mutable Mutex mMutex;
 };
 
 // ----------------------------------------------------------------------------

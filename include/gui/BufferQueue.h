@@ -23,6 +23,7 @@
 #include <gui/IGraphicBufferAlloc.h>
 #include <gui/ISurfaceTexture.h>
 
+#include <ui/Fence.h>
 #include <ui/GraphicBuffer.h>
 
 #include <utils/String8.h>
@@ -39,6 +40,10 @@ public:
     enum { NO_CONNECTED_API = 0 };
     enum { INVALID_BUFFER_SLOT = -1 };
     enum { STALE_BUFFER_SLOT = 1, NO_BUFFER_AVAILABLE };
+
+    // When in async mode we reserve two slots in order to guarantee that the
+    // producer and consumer can run asynchronously.
+    enum { MAX_MAX_ACQUIRED_BUFFERS = NUM_BUFFER_SLOTS - 2 };
 
     // ConsumerListener is the interface through which the BufferQueue notifies
     // the consumer of events that the consumer may wish to react to.  Because
@@ -91,12 +96,12 @@ public:
     };
 
 
-    // BufferQueue manages a pool of gralloc memory slots to be used
-    // by producers and consumers.
-    // allowSynchronousMode specifies whether or not synchronous mode can be
-    // enabled.
-    // bufferCount sets the minimum number of undequeued buffers for this queue
-    BufferQueue(  bool allowSynchronousMode = true, int bufferCount = MIN_UNDEQUEUED_BUFFERS);
+    // BufferQueue manages a pool of gralloc memory slots to be used by
+    // producers and consumers. allowSynchronousMode specifies whether or not
+    // synchronous mode can be enabled by the producer. allocator is used to
+    // allocate all the needed gralloc buffers.
+    BufferQueue(bool allowSynchronousMode = true,
+            const sp<IGraphicBufferAlloc>& allocator = NULL);
     virtual ~BufferQueue();
 
     virtual int query(int what, int* value);
@@ -113,12 +118,18 @@ public:
     // pointed to by the buf argument and a status of OK is returned.  If no
     // slot is available then a status of -EBUSY is returned and buf is
     // unmodified.
+    //
+    // The fence parameter will be updated to hold the fence associated with
+    // the buffer. The contents of the buffer must not be overwritten until the
+    // fence signals. If the fence is NULL, the buffer may be written
+    // immediately.
+    //
     // The width and height parameters must be no greater than the minimum of
     // GL_MAX_VIEWPORT_DIMS and GL_MAX_TEXTURE_SIZE (see: glGetIntegerv).
     // An error due to invalid dimensions might not be reported until
     // updateTexImage() is called.
-    virtual status_t dequeueBuffer(int *buf, uint32_t width, uint32_t height,
-            uint32_t format, uint32_t usage);
+    virtual status_t dequeueBuffer(int *buf, sp<Fence>& fence,
+            uint32_t width, uint32_t height, uint32_t format, uint32_t usage);
 
     // queueBuffer returns a filled buffer to the BufferQueue. In addition, a
     // timestamp must be provided for the buffer. The timestamp is in
@@ -134,7 +145,7 @@ public:
             const QueueBufferInput& input, QueueBufferOutput* output);
 #endif
 
-    virtual void cancelBuffer(int buf);
+    virtual void cancelBuffer(int buf, sp<Fence> fence);
 
     // setSynchronousMode set whether dequeueBuffer is synchronous or
     // asynchronous. In synchronous mode, dequeueBuffer blocks until
@@ -210,6 +221,8 @@ public:
         // slot. Content of metadata may be different dependeing on usecase.
         sp<IMemory> mMetadata;
 #endif
+        // mFence is a fence that will signal when the buffer is idle.
+        sp<Fence> mFence;
     };
 
     // The following public functions is the consumer facing interface
@@ -226,9 +239,15 @@ public:
     // releaseBuffer releases a buffer slot from the consumer back to the
     // BufferQueue pending a fence sync.
     //
+    // If releaseBuffer returns STALE_BUFFER_SLOT, then the consumer must free
+    // any references to the just-released buffer that it might have, as if it
+    // had received a onBuffersReleased() call with a mask set for the released
+    // buffer.
+    //
     // Note that the dependencies on EGL will be removed once we switch to using
     // the Android HW Sync HAL.
-    status_t releaseBuffer(int buf, EGLDisplay display, EGLSyncKHR fence);
+    status_t releaseBuffer(int buf, EGLDisplay display, EGLSyncKHR fence,
+            const sp<Fence>& releaseFence);
 
     // consumerConnect connects a consumer to the BufferQueue.  Only one
     // consumer may be connected, and when that consumer disconnects the
@@ -251,10 +270,15 @@ public:
     // requestBuffers when a with and height of zero is requested.
     status_t setDefaultBufferSize(uint32_t w, uint32_t h);
 
-    // setBufferCountServer set the buffer count. If the client has requested
+    // setDefaultBufferCount set the buffer count. If the client has requested
     // a buffer count using setBufferCount, the server-buffer count will
     // take effect once the client sets the count back to zero.
-    status_t setBufferCountServer(int bufferCount);
+    status_t setDefaultMaxBufferCount(int bufferCount);
+
+    // setMaxAcquiredBufferCount sets the maximum number of buffers that can
+    // be acquired by the consumer at one time.  This call will fail if a
+    // producer is connected to the BufferQueue.
+    status_t setMaxAcquiredBufferCount(int maxAcquiredBuffers);
 
     // isSynchronousMode returns whether the SurfaceTexture is currently in
     // synchronous mode.
@@ -302,7 +326,31 @@ private:
     // are freed except the current buffer.
     status_t drainQueueAndFreeBuffersLocked();
 
-    status_t setBufferCountServerLocked(int bufferCount);
+    // setDefaultMaxBufferCountLocked sets the maximum number of buffer slots
+    // that will be used if the producer does not override the buffer slot
+    // count.
+    status_t setDefaultMaxBufferCountLocked(int count);
+
+    // getMinBufferCountLocked returns the minimum number of buffers allowed
+    // given the current BufferQueue state.
+    int getMinMaxBufferCountLocked() const;
+
+    // getMinUndequeuedBufferCountLocked returns the minimum number of buffers
+    // that must remain in a state other than DEQUEUED.
+    int getMinUndequeuedBufferCountLocked() const;
+
+    // getMaxBufferCountLocked returns the maximum number of buffers that can
+    // be allocated at once.  This value depends upon the following member
+    // variables:
+    //
+    //      mSynchronousMode
+    //      mMaxAcquiredBufferCount
+    //      mDefaultMaxBufferCount
+    //      mOverrideMaxBufferCount
+    //
+    // Any time one of these member variables is changed while a producer is
+    // connected, mDequeueCondition must be broadcast.
+    int getMaxBufferCountLocked() const;
 
     struct BufferSlot {
 
@@ -314,7 +362,7 @@ private:
           mScalingMode(NATIVE_WINDOW_SCALING_MODE_FREEZE),
           mTimestamp(0),
           mFrameNumber(0),
-          mFence(EGL_NO_SYNC_KHR),
+          mEglFence(EGL_NO_SYNC_KHR),
           mAcquireCalled(false),
           mNeedsCleanupOnRelease(false) {
             mCrop.makeInvalid();
@@ -375,9 +423,11 @@ private:
         Rect mCrop;
 
         // mTransform is the current transform flags for this buffer slot.
+        // (example: NATIVE_WINDOW_TRANSFORM_ROT_90)
         uint32_t mTransform;
 
         // mScalingMode is the current scaling mode for this buffer slot.
+        // (example: NATIVE_WINDOW_SCALING_MODE_FREEZE)
         uint32_t mScalingMode;
 
         // mTimestamp is the current timestamp for this buffer slot. This gets
@@ -387,11 +437,22 @@ private:
         // mFrameNumber is the number of the queued frame for this slot.
         uint64_t mFrameNumber;
 
-        // mFence is the EGL sync object that must signal before the buffer
+        // mEglFence is the EGL sync object that must signal before the buffer
         // associated with this buffer slot may be dequeued. It is initialized
         // to EGL_NO_SYNC_KHR when the buffer is created and (optionally, based
         // on a compile-time option) set to a new sync object in updateTexImage.
-        EGLSyncKHR mFence;
+        EGLSyncKHR mEglFence;
+
+        // mFence is a fence which will signal when work initiated by the
+        // previous owner of the buffer is finished. When the buffer is FREE,
+        // the fence indicates when the consumer has finished reading
+        // from the buffer, or when the producer has finished writing if it
+        // called cancelBuffer after queueing some writes. When the buffer is
+        // QUEUED, it indicates when the producer has finished filling the
+        // buffer. When the buffer is DEQUEUED or ACQUIRED, the fence has been
+        // passed to the consumer or producer along with ownership of the
+        // buffer, and mFence is empty.
+        sp<Fence> mFence;
 
         // Indicates whether this buffer has been seen by a consumer yet
         bool mAcquireCalled;
@@ -426,34 +487,27 @@ private:
     // in requestBuffers() if a width and height of zero is specified.
     uint32_t mDefaultHeight;
 
-    // mPixelFormat holds the pixel format of allocated buffers. It is used
-    // in requestBuffers() if a format of zero is specified.
-    uint32_t mPixelFormat;
+    // mMaxAcquiredBufferCount is the number of buffers that the consumer may
+    // acquire at one time.  It defaults to 1 and can be changed by the
+    // consumer via the setMaxAcquiredBufferCount method, but this may only be
+    // done when no producer is connected to the BufferQueue.
+    //
+    // This value is used to derive the value returned for the
+    // MIN_UNDEQUEUED_BUFFERS query by the producer.
+    int mMaxAcquiredBufferCount;
 
-    // mMinUndequeuedBuffers is a constraint on the number of buffers
-    // not dequeued at any time
-    int mMinUndequeuedBuffers;
+    // mDefaultMaxBufferCount is the default limit on the number of buffers
+    // that will be allocated at one time.  This default limit is set by the
+    // consumer.  The limit (as opposed to the default limit) may be
+    // overridden by the producer.
+    int mDefaultMaxBufferCount;
 
-    // mMinAsyncBufferSlots is a constraint on the minimum mBufferCount
-    // when this BufferQueue is in asynchronous mode
-    int mMinAsyncBufferSlots;
-
-    // mMinSyncBufferSlots is a constraint on the minimum mBufferCount
-    // when this BufferQueue is in synchronous mode
-    int mMinSyncBufferSlots;
-
-    // mBufferCount is the number of buffer slots that the client and server
-    // must maintain. It defaults to MIN_ASYNC_BUFFER_SLOTS and can be changed
-    // by calling setBufferCount or setBufferCountServer
-    int mBufferCount;
-
-    // mClientBufferCount is the number of buffer slots requested by the client.
-    // The default is zero, which means the client doesn't care how many buffers
-    // there is.
-    int mClientBufferCount;
-
-    // mServerBufferCount buffer count requested by the server-side
-    int mServerBufferCount;
+    // mOverrideMaxBufferCount is the limit on the number of buffers that will
+    // be allocated at one time. This value is set by the image producer by
+    // calling setBufferCount. The default is zero, which means the producer
+    // doesn't care about the number of buffers in the pool. In that case
+    // mDefaultMaxBufferCount is used as the limit.
+    int mOverrideMaxBufferCount;
 
     // mGraphicBufferAlloc is the connection to SurfaceFlinger that is used to
     // allocate new GraphicBuffer objects.

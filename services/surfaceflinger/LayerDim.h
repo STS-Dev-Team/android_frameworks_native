@@ -32,11 +32,10 @@ namespace android {
 class LayerDim : public LayerBaseClient
 {
 public:    
-                LayerDim(SurfaceFlinger* flinger, DisplayID display,
-                        const sp<Client>& client);
+                LayerDim(SurfaceFlinger* flinger, const sp<Client>& client);
         virtual ~LayerDim();
 
-    virtual void onDraw(const Region& clip) const;
+    virtual void onDraw(const sp<const DisplayDevice>& hw, const Region& clip) const;
     virtual bool isOpaque() const         { return false; }
     virtual bool isSecure() const         { return false; }
     virtual bool isProtectedByApp() const { return false; }

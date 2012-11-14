@@ -29,9 +29,11 @@
 #include <hardware/hardware.h>
 
 #include "clz.h"
+#include "Client.h"
 #include "LayerBase.h"
+#include "Layer.h"
 #include "SurfaceFlinger.h"
-#include "DisplayHardware/DisplayHardware.h"
+#include "DisplayDevice.h"
 
 namespace android {
 
@@ -39,18 +41,14 @@ namespace android {
 
 int32_t LayerBase::sSequence = 1;
 
-LayerBase::LayerBase(SurfaceFlinger* flinger, DisplayID display)
-    : dpy(display), contentDirty(false),
+LayerBase::LayerBase(SurfaceFlinger* flinger)
+    : contentDirty(false),
       sequence(uint32_t(android_atomic_inc(&sSequence))),
       mFlinger(flinger), mFiltering(false),
       mNeedsFiltering(false),
-      mOrientation(0),
-      mPlaneOrientation(0),
       mTransactionFlags(0),
       mPremultipliedAlpha(true), mName("unnamed"), mDebug(false)
 {
-    const DisplayHardware& hw(flinger->graphicPlane(0).displayHardware());
-    mFlags = hw.getFlags();
 }
 
 LayerBase::~LayerBase()
@@ -65,23 +63,13 @@ String8 LayerBase::getName() const {
     return mName;
 }
 
-const GraphicPlane& LayerBase::graphicPlane(int dpy) const
-{ 
-    return mFlinger->graphicPlane(dpy);
-}
-
-GraphicPlane& LayerBase::graphicPlane(int dpy)
-{
-    return mFlinger->graphicPlane(dpy); 
-}
-
 void LayerBase::initStates(uint32_t w, uint32_t h, uint32_t flags)
 {
     uint32_t layerFlags = 0;
-    if (flags & ISurfaceComposer::eHidden)
-        layerFlags = ISurfaceComposer::eLayerHidden;
+    if (flags & ISurfaceComposerClient::eHidden)
+        layerFlags = layer_state_t::eLayerHidden;
 
-    if (flags & ISurfaceComposer::eNonPremultiplied)
+    if (flags & ISurfaceComposerClient::eNonPremultiplied)
         mPremultipliedAlpha = false;
 
     mCurrentState.active.w = w;
@@ -89,6 +77,7 @@ void LayerBase::initStates(uint32_t w, uint32_t h, uint32_t flags)
     mCurrentState.active.crop.makeInvalid();
     mCurrentState.z = 0;
     mCurrentState.alpha = 0xFF;
+    mCurrentState.layerStack = 0;
     mCurrentState.flags = layerFlags;
     mCurrentState.sequence = 0;
     mCurrentState.transform.set(0, 0);
@@ -96,6 +85,10 @@ void LayerBase::initStates(uint32_t w, uint32_t h, uint32_t flags)
 
     // drawing state & current state are identical
     mDrawingState = mCurrentState;
+}
+
+bool LayerBase::needsFiltering(const sp<const DisplayDevice>& hw) const {
+    return mNeedsFiltering || hw->needsFiltering();
 }
 
 void LayerBase::commitTransaction() {
@@ -181,25 +174,29 @@ bool LayerBase::setCrop(const Rect& crop) {
     return true;
 }
 
-Rect LayerBase::visibleBounds() const
-{
-    return mTransformedBounds;
-}      
+bool LayerBase::setLayerStack(uint32_t layerStack) {
+    if (mCurrentState.layerStack == layerStack)
+        return false;
+    mCurrentState.sequence++;
+    mCurrentState.layerStack = layerStack;
+    requestTransaction();
+    return true;
+}
 
 void LayerBase::setVisibleRegion(const Region& visibleRegion) {
     // always called from main thread
-    visibleRegionScreen = visibleRegion;
+    this->visibleRegion = visibleRegion;
 }
 
 void LayerBase::setCoveredRegion(const Region& coveredRegion) {
     // always called from main thread
-    coveredRegionScreen = coveredRegion;
+    this->coveredRegion = coveredRegion;
 }
 
 void LayerBase::setVisibleNonTransparentRegion(const Region&
-        visibleNonTransparentRegion) {
+        setVisibleNonTransparentRegion) {
     // always called from main thread
-    this->visibleNonTransparentRegion = visibleNonTransparentRegion;
+    this->visibleNonTransparentRegion = setVisibleNonTransparentRegion;
 }
 
 uint32_t LayerBase::doTransaction(uint32_t flags)
@@ -236,99 +233,90 @@ uint32_t LayerBase::doTransaction(uint32_t flags)
     return flags;
 }
 
-void LayerBase::validateVisibility(const Transform& planeTransform)
+void LayerBase::computeGeometry(const sp<const DisplayDevice>& hw, LayerMesh* mesh) const
 {
     const Layer::State& s(drawingState());
-    const Transform tr(planeTransform * s.transform);
-    const bool transformed = tr.transformed();
-    const DisplayHardware& hw(graphicPlane(0).displayHardware());
-    const uint32_t hw_h = hw.getHeight();
-    const Rect& crop(s.active.crop);
-
+    const Transform tr(hw->getTransform() * s.transform);
+    const uint32_t hw_h = hw->getHeight();
     Rect win(s.active.w, s.active.h);
-    if (!crop.isEmpty()) {
-        win.intersect(crop, &win);
+    if (!s.active.crop.isEmpty()) {
+        win.intersect(s.active.crop, &win);
     }
-
-    mNumVertices = 4;
-    tr.transform(mVertices[0], win.left,  win.top);
-    tr.transform(mVertices[1], win.left,  win.bottom);
-    tr.transform(mVertices[2], win.right, win.bottom);
-    tr.transform(mVertices[3], win.right, win.top);
-    for (size_t i=0 ; i<4 ; i++)
-        mVertices[i][1] = hw_h - mVertices[i][1];
-
-    if (CC_UNLIKELY(transformed)) {
-        // NOTE: here we could also punt if we have too many rectangles
-        // in the transparent region
-        if (tr.preserveRects()) {
-            // transform the transparent region
-            transparentRegionScreen = tr.transform(s.transparentRegion);
-        } else {
-            // transformation too complex, can't do the transparent region
-            // optimization.
-            transparentRegionScreen.clear();
+    if (mesh) {
+        tr.transform(mesh->mVertices[0], win.left,  win.top);
+        tr.transform(mesh->mVertices[1], win.left,  win.bottom);
+        tr.transform(mesh->mVertices[2], win.right, win.bottom);
+        tr.transform(mesh->mVertices[3], win.right, win.top);
+        for (size_t i=0 ; i<4 ; i++) {
+            mesh->mVertices[i][1] = hw_h - mesh->mVertices[i][1];
         }
-    } else {
-        transparentRegionScreen = s.transparentRegion;
     }
-
-    // cache a few things...
-    mOrientation = tr.getOrientation();
-    mPlaneOrientation = planeTransform.getOrientation();
-    mTransform = tr;
-    mTransformedBounds = tr.transform(win);
 }
 
-void LayerBase::lockPageFlip(bool& recomputeVisibleRegions) {
+Rect LayerBase::computeBounds() const {
+    const Layer::State& s(drawingState());
+    Rect win(s.active.w, s.active.h);
+    if (!s.active.crop.isEmpty()) {
+        win.intersect(s.active.crop, &win);
+    }
+    return s.transform.transform(win);
 }
 
-void LayerBase::unlockPageFlip(
-        const Transform& planeTransform, Region& outDirtyRegion) {
+Region LayerBase::latchBuffer(bool& recomputeVisibleRegions) {
+    Region result;
+    return result;
 }
 
-void LayerBase::setGeometry(hwc_layer_t* hwcl)
+void LayerBase::setGeometry(
+    const sp<const DisplayDevice>& hw,
+        HWComposer::HWCLayerInterface& layer)
 {
-    hwcl->compositionType = HWC_FRAMEBUFFER;
-    hwcl->hints = 0;
-    hwcl->flags = HWC_SKIP_LAYER;
-    hwcl->transform = 0;
-    hwcl->blending = HWC_BLENDING_NONE;
+    layer.setDefaultState();
 
     // this gives us only the "orientation" component of the transform
     const State& s(drawingState());
     const uint32_t finalTransform = s.transform.getOrientation();
     // we can only handle simple transformation
     if (finalTransform & Transform::ROT_INVALID) {
-        hwcl->flags = HWC_SKIP_LAYER;
+        layer.setTransform(0);
     } else {
-        hwcl->transform = finalTransform;
+        layer.setTransform(finalTransform);
     }
 
     if (!isOpaque()) {
-        hwcl->blending = mPremultipliedAlpha ?
-                HWC_BLENDING_PREMULT : HWC_BLENDING_COVERAGE;
+        layer.setBlending(mPremultipliedAlpha ?
+                HWC_BLENDING_PREMULT :
+                HWC_BLENDING_COVERAGE);
     }
 
-    // scaling is already applied in mTransformedBounds
-    hwcl->displayFrame.left   = mTransformedBounds.left;
-    hwcl->displayFrame.top    = mTransformedBounds.top;
-    hwcl->displayFrame.right  = mTransformedBounds.right;
-    hwcl->displayFrame.bottom = mTransformedBounds.bottom;
-    hwcl->visibleRegionScreen.rects =
-            reinterpret_cast<hwc_rect_t const *>(
-                    visibleRegionScreen.getArray(
-                            &hwcl->visibleRegionScreen.numRects));
+    const Transform& tr = hw->getTransform();
+    Rect transformedBounds(computeBounds());
+    transformedBounds = tr.transform(transformedBounds);
 
-    hwcl->sourceCrop.left   = 0;
-    hwcl->sourceCrop.top    = 0;
-    hwcl->sourceCrop.right  = mTransformedBounds.width();
-    hwcl->sourceCrop.bottom = mTransformedBounds.height();
+    // scaling is already applied in transformedBounds
+    layer.setFrame(transformedBounds);
+    layer.setCrop(transformedBounds.getBounds());
 }
 
-void LayerBase::setPerFrameData(hwc_layer_t* hwcl) {
-    hwcl->compositionType = HWC_FRAMEBUFFER;
-    hwcl->handle = NULL;
+void LayerBase::setPerFrameData(const sp<const DisplayDevice>& hw,
+        HWComposer::HWCLayerInterface& layer) {
+    // we have to set the visible region on every frame because
+    // we currently free it during onLayerDisplayed(), which is called
+    // after HWComposer::commit() -- every frame.
+    const Transform& tr = hw->getTransform();
+    layer.setVisibleRegionScreen(tr.transform(visibleRegion));
+}
+
+void LayerBase::setAcquireFence(const sp<const DisplayDevice>& hw,
+        HWComposer::HWCLayerInterface& layer) {
+    layer.setAcquireFenceFd(-1);
+}
+
+void LayerBase::onLayerDisplayed(const sp<const DisplayDevice>& hw,
+        HWComposer::HWCLayerInterface* layer) {
+    if (layer) {
+        layer->onDisplayed();
+    }
 }
 
 void LayerBase::setFiltering(bool filtering)
@@ -341,44 +329,46 @@ bool LayerBase::getFiltering() const
     return mFiltering;
 }
 
-void LayerBase::draw(const Region& clip) const
-{
-    onDraw(clip);
+bool LayerBase::isVisible() const {
+    const Layer::State& s(mDrawingState);
+    return !(s.flags & layer_state_t::eLayerHidden) && s.alpha;
 }
 
-void LayerBase::drawForSreenShot()
+void LayerBase::draw(const sp<const DisplayDevice>& hw, const Region& clip) const
 {
-    const DisplayHardware& hw(graphicPlane(0).displayHardware());
-    setFiltering(true);
-    onDraw( Region(hw.bounds()) );
-    setFiltering(false);
+    onDraw(hw, clip);
 }
 
-void LayerBase::clearWithOpenGL(const Region& clip, GLclampf red,
-                                GLclampf green, GLclampf blue,
-                                GLclampf alpha) const
+void LayerBase::draw(const sp<const DisplayDevice>& hw)
 {
-    const DisplayHardware& hw(graphicPlane(0).displayHardware());
-    const uint32_t fbHeight = hw.getHeight();
+    onDraw( hw, Region(hw->bounds()) );
+}
+
+void LayerBase::clearWithOpenGL(const sp<const DisplayDevice>& hw, const Region& clip,
+        GLclampf red, GLclampf green, GLclampf blue, GLclampf alpha) const
+{
+    const uint32_t fbHeight = hw->getHeight();
     glColor4f(red,green,blue,alpha);
 
     glDisable(GL_TEXTURE_EXTERNAL_OES);
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
 
-    glVertexPointer(2, GL_FLOAT, 0, mVertices);
-    glDrawArrays(GL_TRIANGLE_FAN, 0, mNumVertices);
+    LayerMesh mesh;
+    computeGeometry(hw, &mesh);
+
+    glVertexPointer(2, GL_FLOAT, 0, mesh.getVertices());
+    glDrawArrays(GL_TRIANGLE_FAN, 0, mesh.getVertexCount());
 }
 
-void LayerBase::clearWithOpenGL(const Region& clip) const
+void LayerBase::clearWithOpenGL(const sp<const DisplayDevice>& hw, const Region& clip) const
 {
-    clearWithOpenGL(clip,0,0,0,0);
+    clearWithOpenGL(hw, clip, 0,0,0,0);
 }
 
-void LayerBase::drawWithOpenGL(const Region& clip) const
+void LayerBase::drawWithOpenGL(const sp<const DisplayDevice>& hw, const Region& clip) const
 {
-    const DisplayHardware& hw(graphicPlane(0).displayHardware());
-    const uint32_t fbHeight = hw.getHeight();
+    const uint32_t fbHeight = hw->getHeight();
     const State& s(drawingState());
 
     GLenum src = mPremultipliedAlpha ? GL_ONE : GL_SRC_ALPHA;
@@ -403,19 +393,26 @@ void LayerBase::drawWithOpenGL(const Region& clip) const
         }
     }
 
+    LayerMesh mesh;
+    computeGeometry(hw, &mesh);
+
+    // TODO: we probably want to generate the texture coords with the mesh
+    // here we assume that we only have 4 vertices
+
     struct TexCoords {
         GLfloat u;
         GLfloat v;
     };
 
-    Rect crop(s.active.w, s.active.h);
+    Rect win(s.active.w, s.active.h);
     if (!s.active.crop.isEmpty()) {
-        crop = s.active.crop;
+        win.intersect(s.active.crop, &win);
     }
-    GLfloat left = GLfloat(crop.left) / GLfloat(s.active.w);
-    GLfloat top = GLfloat(crop.top) / GLfloat(s.active.h);
-    GLfloat right = GLfloat(crop.right) / GLfloat(s.active.w);
-    GLfloat bottom = GLfloat(crop.bottom) / GLfloat(s.active.h);
+
+    GLfloat left   = GLfloat(win.left)   / GLfloat(s.active.w);
+    GLfloat top    = GLfloat(win.top)    / GLfloat(s.active.h);
+    GLfloat right  = GLfloat(win.right)  / GLfloat(s.active.w);
+    GLfloat bottom = GLfloat(win.bottom) / GLfloat(s.active.h);
 
     TexCoords texCoords[4];
     texCoords[0].u = left;
@@ -431,9 +428,9 @@ void LayerBase::drawWithOpenGL(const Region& clip) const
     }
 
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glVertexPointer(2, GL_FLOAT, 0, mVertices);
     glTexCoordPointer(2, GL_FLOAT, 0, texCoords);
-    glDrawArrays(GL_TRIANGLE_FAN, 0, mNumVertices);
+    glVertexPointer(2, GL_FLOAT, 0, mesh.getVertices());
+    glDrawArrays(GL_TRIANGLE_FAN, 0, mesh.getVertexCount());
 
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     glDisable(GL_BLEND);
@@ -449,15 +446,14 @@ void LayerBase::dump(String8& result, char* buffer, size_t SIZE) const
     result.append(buffer);
 
     s.transparentRegion.dump(result, "transparentRegion");
-    transparentRegionScreen.dump(result, "transparentRegionScreen");
-    visibleRegionScreen.dump(result, "visibleRegionScreen");
+    visibleRegion.dump(result, "visibleRegion");
 
     snprintf(buffer, SIZE,
             "      "
-            "z=%9d, pos=(%g,%g), size=(%4d,%4d), crop=(%4d,%4d,%4d,%4d), "
+            "layerStack=%4d, z=%9d, pos=(%g,%g), size=(%4d,%4d), crop=(%4d,%4d,%4d,%4d), "
             "isOpaque=%1d, needsDithering=%1d, invalidate=%1d, "
             "alpha=0x%02x, flags=0x%08x, tr=[%.2f, %.2f][%.2f, %.2f]\n",
-            s.z, s.transform.tx(), s.transform.ty(), s.active.w, s.active.h,
+            s.layerStack, s.z, s.transform.tx(), s.transform.ty(), s.active.w, s.active.h,
             s.active.crop.left, s.active.crop.top,
             s.active.crop.right, s.active.crop.bottom,
             isOpaque(), needsDithering(), contentDirty,
@@ -477,13 +473,21 @@ void LayerBase::dumpStats(String8& result, char* scratch, size_t SIZE) const {
 void LayerBase::clearStats() {
 }
 
+sp<LayerBaseClient> LayerBase::getLayerBaseClient() const {
+    return 0;
+}
+
+sp<Layer> LayerBase::getLayer() const {
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 
 int32_t LayerBaseClient::sIdentity = 1;
 
-LayerBaseClient::LayerBaseClient(SurfaceFlinger* flinger, DisplayID display,
+LayerBaseClient::LayerBaseClient(SurfaceFlinger* flinger,
         const sp<Client>& client)
-    : LayerBase(flinger, display),
+    : LayerBase(flinger),
       mHasSurface(false),
       mClientRef(client),
       mIdentity(uint32_t(android_atomic_inc(&sIdentity)))
@@ -560,7 +564,7 @@ LayerBaseClient::LayerCleaner::LayerCleaner(const sp<SurfaceFlinger>& flinger,
 
 LayerBaseClient::LayerCleaner::~LayerCleaner() {
     // destroy client resources
-    mFlinger->destroySurface(mLayer);
+    mFlinger->onLayerDestroyed(mLayer);
 }
 
 // ---------------------------------------------------------------------------

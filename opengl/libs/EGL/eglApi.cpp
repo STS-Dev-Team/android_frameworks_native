@@ -70,8 +70,6 @@ static const extention_map_t sExtentionMap[] = {
             (__eglMustCastToProperFunctionPointerType)&eglCreateImageKHR },
     { "eglDestroyImageKHR",
             (__eglMustCastToProperFunctionPointerType)&eglDestroyImageKHR },
-    { "eglGetRenderBufferANDROID",
-        (__eglMustCastToProperFunctionPointerType)&eglGetRenderBufferANDROID },
     { "eglGetSystemTimeFrequencyNV",
             (__eglMustCastToProperFunctionPointerType)&eglGetSystemTimeFrequencyNV },
     { "eglGetSystemTimeNV",
@@ -206,6 +204,59 @@ EGLBoolean eglChooseConfig( EGLDisplay dpy, const EGLint *attrib_list,
 
     egl_connection_t* const cnx = &gEGLImpl;
     if (cnx->dso) {
+        if (attrib_list) {
+            char value[PROPERTY_VALUE_MAX];
+            property_get("debug.egl.force_msaa", value, "false");
+
+            if (!strcmp(value, "true")) {
+                size_t attribCount = 0;
+                EGLint attrib = attrib_list[0];
+
+                // Only enable MSAA if the context is OpenGL ES 2.0 and
+                // if no caveat is requested
+                const EGLint *attribRendererable = NULL;
+                const EGLint *attribCaveat = NULL;
+
+                // Count the number of attributes and look for
+                // EGL_RENDERABLE_TYPE and EGL_CONFIG_CAVEAT
+                while (attrib != EGL_NONE) {
+                    attrib = attrib_list[attribCount];
+                    switch (attrib) {
+                        case EGL_RENDERABLE_TYPE:
+                            attribRendererable = &attrib_list[attribCount];
+                            break;
+                        case EGL_CONFIG_CAVEAT:
+                            attribCaveat = &attrib_list[attribCount];
+                            break;
+                    }
+                    attribCount++;
+                }
+
+                if (attribRendererable && attribRendererable[1] == EGL_OPENGL_ES2_BIT &&
+                        (!attribCaveat || attribCaveat[1] != EGL_NONE)) {
+    
+                    // Insert 2 extra attributes to force-enable MSAA 4x
+                    EGLint aaAttribs[attribCount + 4];
+                    aaAttribs[0] = EGL_SAMPLE_BUFFERS;
+                    aaAttribs[1] = 1;
+                    aaAttribs[2] = EGL_SAMPLES;
+                    aaAttribs[3] = 4;
+
+                    memcpy(&aaAttribs[4], attrib_list, attribCount * sizeof(EGLint));
+
+                    EGLint numConfigAA;
+                    EGLBoolean resAA = cnx->egl.eglChooseConfig(
+                            dp->disp.dpy, aaAttribs, configs, config_size, &numConfigAA);
+
+                    if (resAA == EGL_TRUE && numConfigAA > 0) {
+                        ALOGD("Enabling MSAA 4x");
+                        *num_config = numConfigAA;
+                        return resAA;
+                    }
+                }
+            }
+        }
+
         res = cnx->egl.eglChooseConfig(
                 dp->disp.dpy, attrib_list, configs, config_size, num_config);
     }
@@ -418,6 +469,12 @@ EGLContext eglCreateContext(EGLDisplay dpy, EGLConfig config,
                 GLTrace_eglCreateContext(version, c);
 #endif
             return c;
+        } else {
+            EGLint error = eglGetError();
+            ALOGE_IF(error == EGL_SUCCESS,
+                    "eglCreateContext(%p, %p, %p, %p) returned EGL_NO_CONTEXT "
+                    "but no EGL error!",
+                    dpy, config, share_list, attrib_list);
         }
     }
     return EGL_NO_CONTEXT;
@@ -654,6 +711,8 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char *procname)
     // These extensions should not be exposed to applications. They're used
     // internally by the Android EGL layer.
     if (!strcmp(procname, "eglSetBlobCacheFuncsANDROID") ||
+        !strcmp(procname, "eglDupNativeFenceFDANDROID") ||
+        !strcmp(procname, "eglWaitSyncANDROID") ||
         !strcmp(procname, "eglHibernateProcessIMG") ||
         !strcmp(procname, "eglAwakenProcessIMG")) {
         return NULL;
@@ -1193,20 +1252,34 @@ EGLBoolean eglGetSyncAttribKHR(EGLDisplay dpy, EGLSyncKHR sync,
 // ANDROID extensions
 // ----------------------------------------------------------------------------
 
-EGLClientBuffer eglGetRenderBufferANDROID(EGLDisplay dpy, EGLSurface draw)
+EGLint eglDupNativeFenceFDANDROID(EGLDisplay dpy, EGLSyncKHR sync)
 {
     clearError();
 
     const egl_display_ptr dp = validate_display(dpy);
-    if (!dp) return EGL_FALSE;
+    if (!dp) return EGL_NO_NATIVE_FENCE_FD_ANDROID;
 
-    egl_surface_t const * const s = get_surface(draw);
-
+    EGLint result = EGL_NO_NATIVE_FENCE_FD_ANDROID;
     egl_connection_t* const cnx = &gEGLImpl;
-    if (cnx->dso && cnx->egl.eglGetRenderBufferANDROID) {
-        return cnx->egl.eglGetRenderBufferANDROID(dp->disp.dpy, s->surface);
+    if (cnx->dso && cnx->egl.eglDupNativeFenceFDANDROID) {
+        result = cnx->egl.eglDupNativeFenceFDANDROID(dp->disp.dpy, sync);
     }
-    return setError(EGL_BAD_DISPLAY, (EGLClientBuffer*)0);
+    return result;
+}
+
+EGLint eglWaitSyncANDROID(EGLDisplay dpy, EGLSyncKHR sync, EGLint flags)
+{
+    clearError();
+
+    const egl_display_ptr dp = validate_display(dpy);
+    if (!dp) return EGL_NO_NATIVE_FENCE_FD_ANDROID;
+
+    EGLint result = EGL_FALSE;
+    egl_connection_t* const cnx = &gEGLImpl;
+    if (cnx->dso && cnx->egl.eglWaitSyncANDROID) {
+        result = cnx->egl.eglWaitSyncANDROID(dp->disp.dpy, sync, flags);
+    }
+    return result;
 }
 
 // ----------------------------------------------------------------------------

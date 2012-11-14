@@ -85,10 +85,13 @@ static void dumpstate() {
     dump_file("ZONEINFO", "/proc/zoneinfo");
     dump_file("PAGETYPEINFO", "/proc/pagetypeinfo");
     dump_file("BUDDYINFO", "/proc/buddyinfo");
+    dump_file("FRAGMENTATION INFO", "/d/extfrag/unusable_index");
 
 
     dump_file("KERNEL WAKELOCKS", "/proc/wakelocks");
+    dump_file("KERNEL WAKE SOURCES", "/d/wakeup_sources");
     dump_file("KERNEL CPUFREQ", "/sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state");
+    dump_file("KERNEL SYNC", "/d/sync");
 
     run_command("PROCESSES", 10, "ps", "-P", NULL);
     run_command("PROCESSES AND THREADS", 10, "ps", "-t", "-p", "-P", NULL);
@@ -164,7 +167,7 @@ static void dumpstate() {
 
     run_command("SYSTEM SETTINGS", 20, SU_PATH, "root", "sqlite3",
             "/data/data/com.android.providers.settings/databases/settings.db",
-            "pragma user_version; select * from system; select * from secure;", NULL);
+            "pragma user_version; select * from system; select * from secure; select * from global;", NULL);
 
     /* The following have a tendency to get wedged when wifi drivers/fw goes belly-up. */
     run_command("NETWORK INTERFACES", 10, SU_PATH, "root", "netcfg", NULL);
@@ -185,6 +188,12 @@ static void dumpstate() {
     run_command("WIFI NETWORKS", 20,
             SU_PATH, "root", "wpa_cli", "list_networks", NULL);
 
+#ifdef FWDUMP_bcmdhd
+    run_command("DUMP WIFI INTERNAL COUNTERS", 20,
+            SU_PATH, "root", "wlutil", "counters", NULL);
+#endif
+    dump_file("INTERRUPTS (1)", "/proc/interrupts");
+
     property_get("dhcp.wlan0.gateway", network, "");
     if (network[0])
         run_command("PING GATEWAY", 10, SU_PATH, "root", "ping", "-c", "3", "-i", ".5", network, NULL);
@@ -194,12 +203,13 @@ static void dumpstate() {
     property_get("dhcp.wlan0.dns2", network, "");
     if (network[0])
         run_command("PING DNS2", 10, SU_PATH, "root", "ping", "-c", "3", "-i", ".5", network, NULL);
-#ifdef FWDUMP_bcm4329
+#ifdef FWDUMP_bcmdhd
     run_command("DUMP WIFI STATUS", 20,
             SU_PATH, "root", "dhdutil", "-i", "wlan0", "dump", NULL);
     run_command("DUMP WIFI INTERNAL COUNTERS", 20,
             SU_PATH, "root", "wlutil", "counters", NULL);
 #endif
+    dump_file("INTERRUPTS (2)", "/proc/interrupts");
 
     print_properties();
 
@@ -314,6 +324,14 @@ int main(int argc, char *argv[]) {
     int use_socket = 0;
     int do_fb = 0;
 
+    if (getuid() != 0) {
+        // Old versions of the adb client would call the
+        // dumpstate command directly. Newer clients
+        // call /system/bin/bugreport instead. If we detect
+        // we're being called incorrectly, then exec the
+        // correct program.
+        return execl("/system/bin/bugreport", "/system/bin/bugreport", NULL);
+    }
     ALOGI("begin\n");
 
     signal(SIGPIPE, SIG_IGN);
@@ -362,44 +380,42 @@ int main(int argc, char *argv[]) {
         fclose(cmdline);
     }
 
-    if (getuid() == 0) {
-        if (prctl(PR_SET_KEEPCAPS, 1) < 0) {
-            ALOGE("prctl(PR_SET_KEEPCAPS) failed: %s\n", strerror(errno));
-            return -1;
-        }
+    if (prctl(PR_SET_KEEPCAPS, 1) < 0) {
+        ALOGE("prctl(PR_SET_KEEPCAPS) failed: %s\n", strerror(errno));
+        return -1;
+    }
 
-        /* switch to non-root user and group */
-        gid_t groups[] = { AID_LOG, AID_SDCARD_R, AID_SDCARD_RW,
-                AID_MOUNT, AID_INET, AID_NET_BW_STATS };
-        if (setgroups(sizeof(groups)/sizeof(groups[0]), groups) != 0) {
-            ALOGE("Unable to setgroups, aborting: %s\n", strerror(errno));
-            return -1;
-        }
-        if (setgid(AID_SHELL) != 0) {
-            ALOGE("Unable to setgid, aborting: %s\n", strerror(errno));
-            return -1;
-        }
-        if (setuid(AID_SHELL) != 0) {
-            ALOGE("Unable to setuid, aborting: %s\n", strerror(errno));
-            return -1;
-        }
+    /* switch to non-root user and group */
+    gid_t groups[] = { AID_LOG, AID_SDCARD_R, AID_SDCARD_RW,
+            AID_MOUNT, AID_INET, AID_NET_BW_STATS };
+    if (setgroups(sizeof(groups)/sizeof(groups[0]), groups) != 0) {
+        ALOGE("Unable to setgroups, aborting: %s\n", strerror(errno));
+        return -1;
+    }
+    if (setgid(AID_SHELL) != 0) {
+        ALOGE("Unable to setgid, aborting: %s\n", strerror(errno));
+        return -1;
+    }
+    if (setuid(AID_SHELL) != 0) {
+        ALOGE("Unable to setuid, aborting: %s\n", strerror(errno));
+        return -1;
+    }
 
-        struct __user_cap_header_struct capheader;
-        struct __user_cap_data_struct capdata[2];
-        memset(&capheader, 0, sizeof(capheader));
-        memset(&capdata, 0, sizeof(capdata));
-        capheader.version = _LINUX_CAPABILITY_VERSION_3;
-        capheader.pid = 0;
+    struct __user_cap_header_struct capheader;
+    struct __user_cap_data_struct capdata[2];
+    memset(&capheader, 0, sizeof(capheader));
+    memset(&capdata, 0, sizeof(capdata));
+    capheader.version = _LINUX_CAPABILITY_VERSION_3;
+    capheader.pid = 0;
 
-        capdata[CAP_TO_INDEX(CAP_SYSLOG)].permitted = CAP_TO_MASK(CAP_SYSLOG);
-        capdata[CAP_TO_INDEX(CAP_SYSLOG)].effective = CAP_TO_MASK(CAP_SYSLOG);
-        capdata[0].inheritable = 0;
-        capdata[1].inheritable = 0;
+    capdata[CAP_TO_INDEX(CAP_SYSLOG)].permitted = CAP_TO_MASK(CAP_SYSLOG);
+    capdata[CAP_TO_INDEX(CAP_SYSLOG)].effective = CAP_TO_MASK(CAP_SYSLOG);
+    capdata[0].inheritable = 0;
+    capdata[1].inheritable = 0;
 
-        if (capset(&capheader, &capdata[0]) < 0) {
-            ALOGE("capset failed: %s\n", strerror(errno));
-            return -1;
-        }
+    if (capset(&capheader, &capdata[0]) < 0) {
+        ALOGE("capset failed: %s\n", strerror(errno));
+        return -1;
     }
 
     char path[PATH_MAX], tmp_path[PATH_MAX];

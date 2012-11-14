@@ -18,6 +18,9 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include <GLES/gl.h>
+#include <GLES/glext.h>
+
 #include <utils/Errors.h>
 #include <utils/Log.h>
 
@@ -25,34 +28,38 @@
 
 #include "LayerScreenshot.h"
 #include "SurfaceFlinger.h"
-#include "DisplayHardware/DisplayHardware.h"
+#include "DisplayDevice.h"
 
 
 namespace android {
 // ---------------------------------------------------------------------------
 
-LayerScreenshot::LayerScreenshot(SurfaceFlinger* flinger, DisplayID display,
+LayerScreenshot::LayerScreenshot(SurfaceFlinger* flinger,
         const sp<Client>& client)
-    : LayerBaseClient(flinger, display, client),
-      mTextureName(0), mFlinger(flinger)
+    : LayerBaseClient(flinger, client),
+      mTextureName(0), mFlinger(flinger), mIsSecure(false)
 {
 }
 
 LayerScreenshot::~LayerScreenshot()
 {
     if (mTextureName) {
-        mFlinger->postMessageAsync(
-                new SurfaceFlinger::MessageDestroyGLTexture(mTextureName) );
+        mFlinger->deleteTextureAsync(mTextureName);
     }
 }
 
-status_t LayerScreenshot::captureLocked() {
+status_t LayerScreenshot::captureLocked(int32_t layerStack) {
     GLfloat u, v;
-    status_t result = mFlinger->renderScreenToTextureLocked(0, &mTextureName, &u, &v);
+    status_t result = mFlinger->renderScreenToTextureLocked(layerStack,
+            &mTextureName, &u, &v);
     if (result != NO_ERROR) {
         return result;
     }
     initTexture(u, v);
+
+    // Currently screenshot always comes from the default display
+    mIsSecure = mFlinger->getDefaultDisplayDevice()->getSecureLayerVisible();
+
     return NO_ERROR;
 }
 
@@ -63,6 +70,10 @@ status_t LayerScreenshot::capture() {
         return result;
     }
     initTexture(u, v);
+
+    // Currently screenshot always comes from the default display
+    mIsSecure = mFlinger->getDefaultDisplayDevice()->getSecureLayerVisible();
+    
     return NO_ERROR;
 }
 
@@ -78,25 +89,29 @@ void LayerScreenshot::initTexture(GLfloat u, GLfloat v) {
 
 void LayerScreenshot::initStates(uint32_t w, uint32_t h, uint32_t flags) {
     LayerBaseClient::initStates(w, h, flags);
-    if (!(flags & ISurfaceComposer::eHidden)) {
+    if (!(flags & ISurfaceComposerClient::eHidden)) {
         capture();
+    }
+    if (flags & ISurfaceComposerClient::eSecure) {
+        ALOGW("ignoring surface flag eSecure - LayerScreenshot is considered "
+                "secure iff it captures the contents of a secure surface.");
     }
 }
 
 uint32_t LayerScreenshot::doTransaction(uint32_t flags)
 {
-    const Layer::State& draw(drawingState());
-    const Layer::State& curr(currentState());
+    const LayerBase::State& draw(drawingState());
+    const LayerBase::State& curr(currentState());
 
-    if (draw.flags & ISurfaceComposer::eLayerHidden) {
-        if (!(curr.flags & ISurfaceComposer::eLayerHidden)) {
+    if (draw.flags & layer_state_t::eLayerHidden) {
+        if (!(curr.flags & layer_state_t::eLayerHidden)) {
             // we're going from hidden to visible
-            status_t err = captureLocked();
+            status_t err = captureLocked(curr.layerStack);
             if (err != NO_ERROR) {
                 ALOGW("createScreenshotSurface failed (%s)", strerror(-err));
             }
         }
-    } else if (curr.flags & ISurfaceComposer::eLayerHidden) {
+    } else if (curr.flags & layer_state_t::eLayerHidden) {
         // we're going from visible to hidden
         if (mTextureName) {
             glDeleteTextures(1, &mTextureName);
@@ -114,28 +129,36 @@ void LayerScreenshot::drawRegion(const Region& clip, int hw_w, int hw_h) const
 }
 #endif
 
-void LayerScreenshot::onDraw(const Region& clip) const
+void LayerScreenshot::onDraw(const sp<const DisplayDevice>& hw, const Region& clip) const
 {
     const State& s(drawingState());
     if (s.alpha>0) {
-        const DisplayHardware& hw(graphicPlane(0).displayHardware());
         const GLfloat alpha = s.alpha/255.0f;
-        const uint32_t fbHeight = hw.getHeight();
+        const uint32_t fbHeight = hw->getHeight();
 
         if (s.alpha == 0xFF) {
             glDisable(GL_BLEND);
+            glTexEnvx(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
         } else {
             glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            glTexEnvx(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
         }
 
-        glColor4f(0, 0, 0, alpha);
+        GLuint texName = mTextureName;
+        if (isSecure() && !hw->isSecure()) {
+            texName = mFlinger->getProtectedTexName();
+        }
+
+        LayerMesh mesh;
+        computeGeometry(hw, &mesh);
+
+        glColor4f(alpha, alpha, alpha, alpha);
 
         glDisable(GL_TEXTURE_EXTERNAL_OES);
         glEnable(GL_TEXTURE_2D);
 
-        glBindTexture(GL_TEXTURE_2D, mTextureName);
-        glTexEnvx(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+        glBindTexture(GL_TEXTURE_2D, texName);
         glMatrixMode(GL_TEXTURE);
         glLoadIdentity();
         glMatrixMode(GL_MODELVIEW);
@@ -144,11 +167,11 @@ void LayerScreenshot::onDraw(const Region& clip) const
 #ifndef OMAP_ENHANCEMENT_S3D
         glTexCoordPointer(2, GL_FLOAT, 0, mTexCoords);
 #endif
-        glVertexPointer(2, GL_FLOAT, 0, mVertices);
+        glVertexPointer(2, GL_FLOAT, 0, mesh.getVertices());
 #ifdef OMAP_ENHANCEMENT_S3D
         drawRegion(clip, hw.getWidth(), fbHeight);
 #else
-        glDrawArrays(GL_TRIANGLE_FAN, 0, mNumVertices);
+        glDrawArrays(GL_TRIANGLE_FAN, 0, mesh.getVertexCount());
 #endif
         glDisable(GL_BLEND);
         glDisable(GL_TEXTURE_2D);

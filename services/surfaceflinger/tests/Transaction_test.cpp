@@ -24,6 +24,7 @@
 #include <private/gui/ComposerService.h>
 
 #include <utils/String8.h>
+#include <ui/DisplayInfo.h>
 
 namespace android {
 
@@ -56,7 +57,8 @@ public:
         uint32_t w=0, h=0;
         PixelFormat fmt=0;
         sp<ISurfaceComposer> sf(ComposerService::getComposerService());
-        ASSERT_EQ(NO_ERROR, sf->captureScreen(0, &heap, &w, &h, &fmt, 0, 0,
+        sp<IBinder> display(sf->getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
+        ASSERT_EQ(NO_ERROR, sf->captureScreen(display, &heap, &w, &h, &fmt, 0, 0,
                 0, INT_MAX));
         ASSERT_TRUE(heap != NULL);
         ASSERT_EQ(PIXEL_FORMAT_RGBA_8888, fmt);
@@ -92,12 +94,17 @@ protected:
         mComposerClient = new SurfaceComposerClient;
         ASSERT_EQ(NO_ERROR, mComposerClient->initCheck());
 
-        ssize_t displayWidth = mComposerClient->getDisplayWidth(0);
-        ssize_t displayHeight = mComposerClient->getDisplayHeight(0);
+        sp<IBinder> display(SurfaceComposerClient::getBuiltInDisplay(
+                ISurfaceComposer::eDisplayIdMain));
+        DisplayInfo info;
+        SurfaceComposerClient::getDisplayInfo(display, &info);
+
+        ssize_t displayWidth = info.w;
+        ssize_t displayHeight = info.h;
 
         // Background surface
         mBGSurfaceControl = mComposerClient->createSurface(
-                String8("BG Test Surface"), 0, displayWidth, displayHeight,
+                String8("BG Test Surface"), displayWidth, displayHeight,
                 PIXEL_FORMAT_RGBA_8888, 0);
         ASSERT_TRUE(mBGSurfaceControl != NULL);
         ASSERT_TRUE(mBGSurfaceControl->isValid());
@@ -105,7 +112,7 @@ protected:
 
         // Foreground surface
         mFGSurfaceControl = mComposerClient->createSurface(
-                String8("FG Test Surface"), 0, 64, 64, PIXEL_FORMAT_RGBA_8888, 0);
+                String8("FG Test Surface"), 64, 64, PIXEL_FORMAT_RGBA_8888, 0);
         ASSERT_TRUE(mFGSurfaceControl != NULL);
         ASSERT_TRUE(mFGSurfaceControl->isValid());
 
@@ -113,7 +120,7 @@ protected:
 
         // Synchronization surface
         mSyncSurfaceControl = mComposerClient->createSurface(
-                String8("Sync Test Surface"), 0, 1, 1, PIXEL_FORMAT_RGBA_8888, 0);
+                String8("Sync Test Surface"), 1, 1, PIXEL_FORMAT_RGBA_8888, 0);
         ASSERT_TRUE(mSyncSurfaceControl != NULL);
         ASSERT_TRUE(mSyncSurfaceControl->isValid());
 

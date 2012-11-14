@@ -92,6 +92,12 @@ bool SurfaceControl::isSameSurface(
     return lhs->mSurface->asBinder() == rhs->mSurface->asBinder();
 }
 
+status_t SurfaceControl::setLayerStack(int32_t layerStack) {
+    status_t err = validate();
+    if (err < 0) return err;
+    const sp<SurfaceComposerClient>& client(mClient);
+    return client->setLayerStack(mToken, layerStack);
+}
 status_t SurfaceControl::setLayer(int32_t layer) {
     status_t err = validate();
     if (err < 0) return err;
@@ -116,23 +122,11 @@ status_t SurfaceControl::hide() {
     const sp<SurfaceComposerClient>& client(mClient);
     return client->hide(mToken);
 }
-status_t SurfaceControl::show(int32_t layer) {
+status_t SurfaceControl::show() {
     status_t err = validate();
     if (err < 0) return err;
     const sp<SurfaceComposerClient>& client(mClient);
-    return client->show(mToken, layer);
-}
-status_t SurfaceControl::freeze() {
-    status_t err = validate();
-    if (err < 0) return err;
-    const sp<SurfaceComposerClient>& client(mClient);
-    return client->freeze(mToken);
-}
-status_t SurfaceControl::unfreeze() {
-    status_t err = validate();
-    if (err < 0) return err;
-    const sp<SurfaceComposerClient>& client(mClient);
-    return client->unfreeze(mToken);
+    return client->show(mToken);
 }
 status_t SurfaceControl::setFlags(uint32_t flags, uint32_t mask) {
     status_t err = validate();
@@ -157,12 +151,6 @@ status_t SurfaceControl::setMatrix(float dsdx, float dtdx, float dsdy, float dtd
     if (err < 0) return err;
     const sp<SurfaceComposerClient>& client(mClient);
     return client->setMatrix(mToken, dsdx, dtdx, dsdy, dtdy);
-}
-status_t SurfaceControl::setFreezeTint(uint32_t tint) {
-    status_t err = validate();
-    if (err < 0) return err;
-    const sp<SurfaceComposerClient>& client(mClient);
-    return client->setFreezeTint(mToken, tint);
 }
 status_t SurfaceControl::setCrop(const Rect& crop) {
     status_t err = validate();
@@ -317,8 +305,11 @@ void Surface::init(const sp<ISurfaceTexture>& surfaceTexture)
             setUsage(GraphicBuffer::USAGE_HW_RENDER);
         }
 
+        // TODO: the display metrics should come from the display manager
         DisplayInfo dinfo;
-        SurfaceComposerClient::getDisplayInfo(0, &dinfo);
+        sp<IBinder> display = SurfaceComposerClient::getBuiltInDisplay(
+                ISurfaceComposer::eDisplayIdMain);
+        SurfaceComposerClient::getDisplayInfo(display, &dinfo);
         const_cast<float&>(ANativeWindow::xdpi) = dinfo.xdpi;
         const_cast<float&>(ANativeWindow::ydpi) = dinfo.ydpi;
         const_cast<uint32_t&>(ANativeWindow::flags) = 0;

@@ -33,7 +33,7 @@ protected:
         ASSERT_EQ(NO_ERROR, mComposerClient->initCheck());
 
         mSurfaceControl = mComposerClient->createSurface(
-                String8("Test Surface"), 0, 32, 32, PIXEL_FORMAT_RGBA_8888, 0);
+                String8("Test Surface"), 32, 32, PIXEL_FORMAT_RGBA_8888, 0);
 
         ASSERT_TRUE(mSurfaceControl != NULL);
         ASSERT_TRUE(mSurfaceControl->isValid());
@@ -85,7 +85,8 @@ TEST_F(SurfaceTest, ScreenshotsOfProtectedBuffersSucceed) {
     uint32_t w=0, h=0;
     PixelFormat fmt=0;
     sp<ISurfaceComposer> sf(ComposerService::getComposerService());
-    ASSERT_EQ(NO_ERROR, sf->captureScreen(0, &heap, &w, &h, &fmt, 64, 64, 0,
+    sp<IBinder> display(sf->getBuiltInDisplay(ISurfaceComposer::eDisplayIdMain));
+    ASSERT_EQ(NO_ERROR, sf->captureScreen(display, &heap, &w, &h, &fmt, 64, 64, 0,
             0x7fffffff));
     ASSERT_TRUE(heap != NULL);
 
@@ -97,26 +98,27 @@ TEST_F(SurfaceTest, ScreenshotsOfProtectedBuffersSucceed) {
     ASSERT_EQ(NO_ERROR, native_window_set_buffer_count(anw.get(), 3));
     ANativeWindowBuffer* buf = 0;
 
-    status_t err = anw->dequeueBuffer(anw.get(), &buf);
+    status_t err = native_window_dequeue_buffer_and_wait(anw.get(), &buf);
     if (err) {
         // we could fail if GRALLOC_USAGE_PROTECTED is not supported.
         // that's okay as long as this is the reason for the failure.
         // try again without the GRALLOC_USAGE_PROTECTED bit.
         ASSERT_EQ(NO_ERROR, native_window_set_usage(anw.get(), 0));
-        ASSERT_EQ(NO_ERROR, anw->dequeueBuffer(anw.get(), &buf));
+        ASSERT_EQ(NO_ERROR, native_window_dequeue_buffer_and_wait(anw.get(),
+                &buf));
         return;
     }
-    ASSERT_EQ(NO_ERROR, anw->cancelBuffer(anw.get(), buf));
+    ASSERT_EQ(NO_ERROR, anw->cancelBuffer(anw.get(), buf, -1));
 
     for (int i = 0; i < 4; i++) {
         // Loop to make sure SurfaceFlinger has retired a protected buffer.
-        ASSERT_EQ(NO_ERROR, anw->dequeueBuffer(anw.get(), &buf));
-        ASSERT_EQ(NO_ERROR, anw->lockBuffer(anw.get(), buf));
-        ASSERT_EQ(NO_ERROR, anw->queueBuffer(anw.get(), buf));
+        ASSERT_EQ(NO_ERROR, native_window_dequeue_buffer_and_wait(anw.get(),
+                &buf));
+        ASSERT_EQ(NO_ERROR, anw->queueBuffer(anw.get(), buf, -1));
     }
     heap = 0;
     w = h = fmt = 0;
-    ASSERT_EQ(NO_ERROR, sf->captureScreen(0, &heap, &w, &h, &fmt,
+    ASSERT_EQ(NO_ERROR, sf->captureScreen(display, &heap, &w, &h, &fmt,
             64, 64, 0, 0x7fffffff));
     ASSERT_TRUE(heap != NULL);
 }
