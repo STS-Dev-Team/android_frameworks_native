@@ -225,13 +225,6 @@ public:
     virtual void dump(String8& result) const;
     virtual void dump(String8& result, const char* prefix, char* buffer, size_t SIZE) const;
 
-#ifdef OMAP_ENHANCEMENT
-    //sets the layout for the buffers
-    virtual status_t setLayout(uint32_t layout);
-    // getCurrentLayout returns the layout of the current buffer
-    uint32_t getCurrentLayout() const;
-#endif
-
 protected:
 
     // Implementation of the BufferQueue::ConsumerListener interface.  These
@@ -311,11 +304,6 @@ private:
     // gets set each time updateTexImage is called.
     int64_t mCurrentTimestamp;
 
-#ifdef OMAP_ENHANCEMENT
-    // current layout for the buffers
-    uint32_t mCurrentLayout;
-#endif
-
     uint32_t mDefaultWidth, mDefaultHeight;
 
     // mFilteringEnabled indicates whether the transform matrix is computed for
@@ -361,13 +349,6 @@ private:
         // to EGL_NO_SYNC_KHR when the buffer is created and (optionally, based
         // on a compile-time option) set to a new sync object in updateTexImage.
         EGLSyncKHR mFence;
-
-#ifdef OMAP_ENHANCEMENT
-        // mLayout is the current layout of the buffer for this buffer slot. This gets
-        // set to mNextLayout each time queueBuffer gets called for this buffer.
-        uint32_t mLayout;
-#endif
-
     };
 
     // mEglDisplay is the EGLDisplay with which this SurfaceTexture is currently

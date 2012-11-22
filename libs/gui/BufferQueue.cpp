@@ -179,9 +179,6 @@ BufferQueue::BufferQueue(  bool allowSynchronousMode, int bufferCount ) :
     mBufferHasBeenQueued(false),
     mDefaultBufferFormat(0),
     mConsumerUsageBits(0),
-#ifdef OMAP_ENHANCEMENT
-    mNextLayout(NATIVE_WINDOW_BUFFERS_LAYOUT_PROGRESSIVE),
-#endif
     mTransformHint(0)
 {
     // Choose a name using the PID and a process-unique ID.
@@ -264,14 +261,6 @@ status_t BufferQueue::setTransformHint(uint32_t hint) {
     mTransformHint = hint;
     return OK;
 }
-
-#ifdef OMAP_ENHANCEMENT
-status_t BufferQueue::setLayout(uint32_t layout) {
-    Mutex::Autolock lock(mMutex);
-    mNextLayout = layout;
-    return OK;
-}
-#endif
 
 status_t BufferQueue::setBufferCount(int bufferCount) {
     ST_LOGV("setBufferCount: count=%d", bufferCount);
@@ -674,14 +663,8 @@ status_t BufferQueue::setSynchronousMode(bool enabled) {
     return err;
 }
 
-#ifdef OMAP_ENHANCEMENT_CPCAM
-status_t BufferQueue::queueBuffer(int buf,
-        const QueueBufferInput& input, QueueBufferOutput* output,
-        const sp<IMemory>& metadata) {
-#else
 status_t BufferQueue::queueBuffer(int buf,
         const QueueBufferInput& input, QueueBufferOutput* output) {
-#endif
     ATRACE_CALL();
     ATRACE_BUFFER_INDEX(buf);
 
@@ -781,12 +764,6 @@ status_t BufferQueue::queueBuffer(int buf,
         mSlots[buf].mScalingMode = scalingMode;
         mFrameCounter++;
         mSlots[buf].mFrameNumber = mFrameCounter;
-#ifdef OMAP_ENHANCEMENT
-        mSlots[buf].mLayout = mNextLayout;
-#endif
-#ifdef OMAP_ENHANCEMENT_CPCAM
-        mSlots[buf].mMetadata = metadata;
-#endif
 
         mBufferHasBeenQueued = true;
         mDequeueCondition.broadcast();
@@ -1013,14 +990,6 @@ void BufferQueue::freeAllBuffersLocked() {
 status_t BufferQueue::acquireBuffer(BufferItem *buffer) {
     ATRACE_CALL();
     Mutex::Autolock _l(mMutex);
-
-#ifdef OMAP_ENHANCEMENT_CPCAM
-    if (mAbandoned) {
-        ST_LOGE("acquireBuffer: SurfaceTexture has been abandoned!");
-        return NO_INIT;
-    }
-#endif
-
     // check if queue is empty
     // In asynchronous mode the list is guaranteed to be one buffer
     // deep, while in synchronous mode we use the oldest buffer.
@@ -1040,13 +1009,7 @@ status_t BufferQueue::acquireBuffer(BufferItem *buffer) {
         buffer->mScalingMode = mSlots[buf].mScalingMode;
         buffer->mFrameNumber = mSlots[buf].mFrameNumber;
         buffer->mTimestamp = mSlots[buf].mTimestamp;
-#ifdef OMAP_ENHANCEMENT_CPCAM
-        buffer->mMetadata = mSlots[buf].mMetadata;
-#endif
         buffer->mBuf = buf;
-#ifdef OMAP_ENHANCEMENT
-        buffer->mLayout = mSlots[buf].mLayout;
-#endif
         mSlots[buf].mAcquireCalled = true;
 
         mSlots[buf].mBufferState = BufferSlot::ACQUIRED;
@@ -1224,65 +1187,5 @@ void BufferQueue::ProxyConsumerListener::onBuffersReleased() {
         listener->onBuffersReleased();
     }
 }
-
-#ifdef OMAP_ENHANCEMENT_CPCAM
-status_t BufferQueue::updateAndGetCurrent(sp<GraphicBuffer>* buf) {
-    ST_LOGV("updateAndGetCurrent");
-    BufferItem item;
-    status_t status = acquireBuffer(&item);
-    if (status != NO_BUFFER_AVAILABLE) {
-        *buf = mSlots[item.mBuf].mGraphicBuffer;
-    }
-    return status;
-}
-
-
-int BufferQueue::addBufferSlot(const sp<GraphicBuffer>& buffer) {
-    Mutex::Autolock lock(mMutex);
-
-    // Find first free slot to add buffer
-    for (int i = 0; i < mBufferCount; i++) {
-        if ((mSlots[i].mGraphicBuffer == NULL) &&
-                (mSlots[i].mBufferState == BufferSlot::FREE)) {
-            // add buffer is dequeued state since client still has ownership of it
-            mSlots[i].mBufferState = BufferSlot::DEQUEUED;
-            mSlots[i].mRequestBufferCalled = true;
-            mSlots[i].mGraphicBuffer = buffer;
-            return i;
-        }
-    }
-    return -1;
-}
-
-status_t BufferQueue::getBuffer(int slot, BufferItem *buffer) {
-    ATRACE_CALL();
-    Mutex::Autolock _l(mMutex);
-
-    if (slot < 0 || slot >= mBufferCount) {
-        ALOGE("Invalid slot index");
-        return BAD_VALUE;
-    }
-
-    ATRACE_BUFFER_INDEX(slot);
-
-    if (mSlots[slot].mAcquireCalled) {
-        buffer->mGraphicBuffer = mSlots[slot].mGraphicBuffer;
-    } else {
-        buffer->mGraphicBuffer = NULL;
-    }
-
-    buffer->mCrop = mSlots[slot].mCrop;
-    buffer->mTransform = mSlots[slot].mTransform;
-    buffer->mScalingMode = mSlots[slot].mScalingMode;
-    buffer->mFrameNumber = mSlots[slot].mFrameNumber;
-    buffer->mTimestamp = mSlots[slot].mTimestamp;
-    buffer->mMetadata = mSlots[slot].mMetadata;
-
-    buffer->mBuf = slot;
-
-    return OK;
-
-}
-#endif
 
 }; // namespace android
